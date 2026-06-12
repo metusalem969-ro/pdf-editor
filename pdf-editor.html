@@ -736,6 +736,8 @@ async function goPage(d) {
   if (n < 1 || n > numPages) return;
   pageNum = n;
   await renderPage(pageNum);
+  viewer.scrollTop = 0;
+  viewer.scrollLeft = 0;
   scheduleThumbRender(pageNum);
 }
 
@@ -1047,9 +1049,53 @@ async function commitPinch() {
   }
 }
 
+// ── Swipe pagini + pinch zoom ───────────────────────────────────────────────
+let swipeStart = null;
+const SWIPE_MIN = 55;
+const SWIPE_MAX_MS = 450;
+
+function canScrollViewer() {
+  return {
+    h: viewer.scrollWidth > viewer.clientWidth + 8,
+    v: viewer.scrollHeight > viewer.clientHeight + 8
+  };
+}
+
+function atScrollEdge() {
+  return {
+    top: viewer.scrollTop <= 8,
+    bottom: viewer.scrollTop + viewer.clientHeight >= viewer.scrollHeight - 8,
+    left: viewer.scrollLeft <= 8,
+    right: viewer.scrollLeft + viewer.clientWidth >= viewer.scrollWidth - 8
+  };
+}
+
+function handleSwipePage(dx, dy, start) {
+  const absX = Math.abs(dx);
+  const absY = Math.abs(dy);
+  if (Math.max(absX, absY) < SWIPE_MIN) return;
+
+  const scroll = canScrollViewer();
+  const edge = atScrollEdge();
+  const scrolledH = Math.abs(viewer.scrollLeft - start.scrollLeft) > 20;
+  const scrolledV = Math.abs(viewer.scrollTop - start.scrollTop) > 20;
+
+  if (absX >= absY) {
+    if (scroll.h && scrolledH) return;
+    if (dx <= -SWIPE_MIN) goPage(1);
+    else if (dx >= SWIPE_MIN) goPage(-1);
+    return;
+  }
+
+  if (scroll.v && scrolledV) return;
+  if (dy <= -SWIPE_MIN && (edge.bottom || !scroll.v)) goPage(1);
+  else if (dy >= SWIPE_MIN && (edge.top || !scroll.v)) goPage(-1);
+}
+
 viewer.addEventListener('touchstart', e => {
   if (!pdfDoc || curTool !== 'scroll') return;
   if (e.touches.length === 2) {
+    swipeStart = null;
     pinchActive = true;
     pinchStartDist = touchDist(e.touches);
     pinchStartScale = scale;
@@ -1057,24 +1103,50 @@ viewer.addEventListener('touchstart', e => {
     liveStroke = null;
     activePointerId = null;
     e.preventDefault();
+  } else if (e.touches.length === 1 && !pinchActive) {
+    swipeStart = {
+      x: e.touches[0].clientX,
+      y: e.touches[0].clientY,
+      t: Date.now(),
+      scrollLeft: viewer.scrollLeft,
+      scrollTop: viewer.scrollTop
+    };
   }
 }, { passive: false });
 
 viewer.addEventListener('touchmove', e => {
-  if (!pdfDoc || !pinchActive || e.touches.length !== 2 || pinchStartDist <= 0) return;
-  const dist = touchDist(e.touches);
-  const ratio = dist / pinchStartDist;
-  const newScale = Math.max(0.25, Math.min(5.0, pinchStartScale * ratio));
-  applyPinchPreview(newScale);
-  e.preventDefault();
+  if (!pdfDoc) return;
+  if (pinchActive && e.touches.length === 2 && pinchStartDist > 0) {
+    const dist = touchDist(e.touches);
+    const ratio = dist / pinchStartDist;
+    const newScale = Math.max(0.25, Math.min(5.0, pinchStartScale * ratio));
+    applyPinchPreview(newScale);
+    e.preventDefault();
+    return;
+  }
+  // 1 deget = scroll liber în viewer (nu blocăm)
 }, { passive: false });
 
 viewer.addEventListener('touchend', e => {
-  if (!pinchActive) return;
-  if (e.touches.length < 2) commitPinch();
-}, { passive: false });
+  if (pinchActive) {
+    if (e.touches.length < 2) commitPinch();
+    return;
+  }
+  if (!swipeStart || !pdfDoc || curTool !== 'scroll') return;
+  const touch = e.changedTouches[0];
+  if (!touch) { swipeStart = null; return; }
+
+  const dx = touch.clientX - swipeStart.x;
+  const dy = touch.clientY - swipeStart.y;
+  const dt = Date.now() - swipeStart.t;
+  const start = swipeStart;
+  swipeStart = null;
+
+  if (dt <= SWIPE_MAX_MS) handleSwipePage(dx, dy, start);
+}, { passive: true });
 
 viewer.addEventListener('touchcancel', () => {
+  swipeStart = null;
   if (pinchActive) commitPinch();
 }, { passive: false });
 
