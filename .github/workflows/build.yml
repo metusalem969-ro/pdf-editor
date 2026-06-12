@@ -1,25 +1,38 @@
-
 name: Build APK
+
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
+
       - uses: actions/setup-node@v4
         with:
           node-version: '18'
-      - run: npm install
-      - run: npx cap add android
+          cache: npm
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - run: npm ci
+
       - run: npx cap sync android
-      - run: cd android && chmod +x gradlew && ./gradlew assembleDebug
+
+      - name: Build debug APK
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+          cd android && chmod +x gradlew && ./gradlew assembleDebug
+
       - uses: actions/upload-artifact@v4
         with:
           name: pdf-editor-apk

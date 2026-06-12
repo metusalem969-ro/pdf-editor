@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Capacitor generated (keep android/ committed)
+# android/ is intentionally NOT ignored
+
+# Build outputs
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
+android/capacitor-cordova-android-plugins/build/
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Env
+.env
+.env.*

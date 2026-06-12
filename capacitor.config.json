@@ -1,8 +1,0 @@
-{
-  "appId": "com.metusalem969.pdfeditor",
-  "appName": "PDF Editor",
-  "webDir": "www",
-  "server": {
-    "androidScheme": "https"
-  }
-}
