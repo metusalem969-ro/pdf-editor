@@ -196,15 +196,14 @@ input[type=range]#size-inp::-webkit-slider-thumb {
 #viewer {
   flex: 1;
   overflow: auto;
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-  padding: 12px;
+  padding: 8px;
   background: var(--bg);
   position: relative;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   touch-action: pan-x pan-y;
+  width: 100%;
+  min-width: 0;
 }
 
 #dropzone {
@@ -225,14 +224,14 @@ input[type=range]#size-inp::-webkit-slider-thumb {
   position: relative;
   display: none;
   transform-origin: center center;
-  flex-shrink: 0;
+  margin: 0 auto;
+  width: fit-content;
+  max-width: 100%;
 }
 #pdf-canvas {
   display: block;
   box-shadow: 0 8px 40px rgba(0,0,0,.2);
-  max-width: none;
-  width: auto;
-  height: auto;
+  vertical-align: top;
 }
 #ann-canvas {
   position: absolute; top: 0; left: 0;
@@ -444,6 +443,7 @@ let pdfDoc = null;
 let pageNum = 1;
 let numPages = 0;
 let scale = 1;
+let outputDpr = 1;
 let pinchPreviewScale = null;
 let curTool = 'scroll';
 let isDrawing = false;
@@ -504,8 +504,8 @@ function toggleTheme() {
 loadTheme();
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-const px2doc = v => v / scale;
-const doc2px = (v, sc) => v * (sc || scale);
+const px2doc = v => v / renderScale();
+const doc2px = (v, sc) => v * (sc || renderScale());
 
 function getColor() { return colorEl.value; }
 function getSize() { return Number(sizeEl.value); }
@@ -621,7 +621,9 @@ async function openFile(file) {
     document.getElementById('btn-next').disabled = false;
     document.getElementById('btn-exp').disabled = false;
 
+    await waitForLayout();
     await fitPage();
+    scheduleRefit();
     buildThumbnailPlaceholders();
     scheduleThumbRender(pageNum);
     showToast('✅ ' + file.name + ' · ' + numPages + ' pagini');
@@ -634,16 +636,47 @@ async function openFile(file) {
 
 // ── Render page ─────────────────────────────────────────────────────────────
 function viewerPadding() {
-  return 24;
+  return 16;
+}
+
+function getViewerSize() {
+  const rect = viewer.getBoundingClientRect();
+  const vw = window.visualViewport?.width || rect.width || window.innerWidth;
+  const vh = window.visualViewport?.height || rect.height || window.innerHeight;
+  const pad = viewerPadding();
+  return {
+    w: Math.max(80, Math.min(rect.width, vw) - pad),
+    h: Math.max(80, Math.min(rect.height, vh) - pad)
+  };
+}
+
+async function waitForLayout() {
+  await new Promise(r => requestAnimationFrame(r));
+  await new Promise(r => requestAnimationFrame(r));
+  if (getViewerSize().w < 80) {
+    await new Promise(r => setTimeout(r, 80));
+  }
+}
+
+let refitTimer = null;
+function scheduleRefit() {
+  clearTimeout(refitTimer);
+  refitTimer = setTimeout(async () => {
+    if (pdfDoc) await fitPage();
+  }, 200);
+}
+
+function renderScale() {
+  return scale * outputDpr;
 }
 
 function computeFitScale(vp1) {
-  const pad = viewerPadding();
-  const maxW = Math.max(100, viewer.clientWidth - pad);
-  const maxH = Math.max(100, viewer.clientHeight - pad);
-  const scaleW = maxW / vp1.width;
-  const scaleH = maxH / vp1.height;
-  return Math.max(0.25, Math.min(5.0, Math.min(scaleW, scaleH)));
+  const { w, h } = getViewerSize();
+  const scaleW = w / vp1.width;
+  const scaleH = h / vp1.height;
+  // Potrivește lățimea; dacă pagina e foarte înaltă, încape și pe înălțime
+  const fit = Math.min(scaleW, scaleH * 1.15);
+  return Math.max(0.2, Math.min(5.0, fit));
 }
 
 async function renderPage(num) {
@@ -653,17 +686,23 @@ async function renderPage(num) {
   pinchPreviewScale = null;
   delete canvasWrap.dataset.pinchScale;
 
+  outputDpr = Math.min(window.devicePixelRatio || 1, 2.5);
+
   const page = await pdfDoc.getPage(num);
-  const vp = page.getViewport({ scale });
+  const vpRender = page.getViewport({ scale: renderScale() });
+  const vpDisplay = page.getViewport({ scale });
 
-  pdfCvs.width = annCvs.width = Math.floor(vp.width);
-  pdfCvs.height = annCvs.height = Math.floor(vp.height);
-  pdfCvs.style.width = Math.floor(vp.width) + 'px';
-  pdfCvs.style.height = Math.floor(vp.height) + 'px';
-  annCvs.style.width = pdfCvs.style.width;
-  annCvs.style.height = pdfCvs.style.height;
+  const cssW = Math.floor(vpDisplay.width);
+  const cssH = Math.floor(vpDisplay.height);
 
-  renderTask = page.render({ canvasContext: pdfCtx, viewport: vp });
+  pdfCvs.width = annCvs.width = Math.floor(vpRender.width);
+  pdfCvs.height = annCvs.height = Math.floor(vpRender.height);
+  pdfCvs.style.width = cssW + 'px';
+  pdfCvs.style.height = cssH + 'px';
+  annCvs.style.width = cssW + 'px';
+  annCvs.style.height = cssH + 'px';
+
+  renderTask = page.render({ canvasContext: pdfCtx, viewport: vpRender });
   try {
     await renderTask.promise;
   } catch (e) {
@@ -678,6 +717,7 @@ async function renderPage(num) {
   updateNav();
   highlightThumb(num);
   snapBase = null;
+  canvasWrap.style.maxWidth = cssW + 'px';
 }
 
 function updateNav() {
@@ -754,6 +794,17 @@ document.getElementById('btn-zoom-in').addEventListener('click', () => doZoom(0.
 document.getElementById('btn-zoom-out').addEventListener('click', () => doZoom(-0.25));
 document.getElementById('btn-fit').addEventListener('click', fitPage);
 document.getElementById('btn-theme').addEventListener('click', toggleTheme);
+
+let resizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { if (pdfDoc) scheduleRefit(); }, 200);
+});
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', () => {
+    if (pdfDoc) scheduleRefit();
+  });
+}
 
 // ── Thumbnail sidebar ───────────────────────────────────────────────────────
 document.getElementById('btn-thumbs').addEventListener('click', () => {
@@ -920,13 +971,6 @@ function onPointerDown(e) {
 }
 
 function onPointerMove(e) {
-  if (e.pointerType === 'touch') {
-    if (pinchPointers.has(e.pointerId)) {
-      pinchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    }
-    if (pinchPointers.size === 2) return;
-  }
-
   if (!isDrawing || e.pointerId !== activePointerId || curTool === 'scroll') return;
   const { x, y } = pointerPos(e);
 
@@ -947,13 +991,12 @@ function onPointerMove(e) {
     if (snapBase) annCtx.putImageData(snapBase, 0, 0);
     liveStroke.x2 = px2doc(x);
     liveStroke.y2 = px2doc(y);
-    drawStroke(annCtx, liveStroke);
+    drawStroke(annCtx, liveStroke, renderScale());
   }
   e.preventDefault();
 }
 
 function onPointerUp(e) {
-  pinchPointers.delete(e.pointerId);
   if (e.pointerId !== activePointerId) return;
 
   try { annCvs.releasePointerCapture(e.pointerId); } catch (_) {}
@@ -1101,7 +1144,7 @@ function drawStroke(ctx, s, sc) {
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
-  const baseScale = s.drawScale || scale;
+  const baseScale = (s.drawScale || scale) * outputDpr;
   const scaledLW = s.size * sc / baseScale;
 
   if (s.type === 'eraser') {
@@ -1186,7 +1229,7 @@ function drawStroke(ctx, s, sc) {
 
 function redrawAll(num) {
   annCtx.clearRect(0, 0, annCvs.width, annCvs.height);
-  (annData[num] || []).forEach(s => drawStroke(annCtx, s));
+  (annData[num] || []).forEach(s => drawStroke(annCtx, s, renderScale()));
 }
 
 // ── Annotation actions ──────────────────────────────────────────────────────
