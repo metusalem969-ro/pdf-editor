@@ -362,6 +362,57 @@ input[type=range]#size-inp::-webkit-slider-thumb {
 }
 #note-dialog .actions { display: flex; gap: 8px; margin-top: 10px; justify-content: flex-end; }
 
+#url-dialog, #help-dialog {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.5);
+  z-index: 250;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+#url-dialog.on, #help-dialog.on { display: flex; }
+#url-dialog .box, #help-dialog .box {
+  background: var(--s1);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+  width: min(400px, 92vw);
+  box-shadow: 0 8px 32px rgba(0,0,0,.3);
+}
+#url-dialog input {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--s2);
+  color: var(--text);
+  font-size: 14px;
+  margin-top: 8px;
+}
+#recent-list { margin-top: 12px; max-height: 140px; overflow-y: auto; }
+.recent-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  margin-top: 4px;
+  background: var(--s2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.recent-item:active { background: var(--border); }
+#help-dialog ul { margin: 10px 0 10px 18px; font-size: 13px; line-height: 1.6; color: var(--muted); }
+#help-dialog a { color: var(--blue); }
+
 input[type=file] { display: none; }
 
 @media (max-width: 520px) {
@@ -379,6 +430,8 @@ input[type=file] { display: none; }
   <div class="bar-row">
     <div class="bar-group bar-left">
       <button class="btn primary" id="btn-open">📂 PDF</button>
+      <button class="btn" id="btn-url" title="Deschide din web">🌐</button>
+      <button class="btn" id="btn-help" title="Ajutor">❓</button>
       <button class="btn" id="btn-thumbs" title="Miniaturi">🖼</button>
       <button class="btn" id="btn-prev" disabled>◀</button>
       <span id="page-info" title="Apasă pentru salt la pagină">— / —</span>
@@ -411,8 +464,10 @@ input[type=file] { display: none; }
     <div id="dropzone">
       <div class="dz-ico">📄</div>
       <h2>PDF Editor METUSALEM969</h2>
-      <p>Apasă 📂 PDF sau trage un fișier aici</p>
+      <p>Apasă 📂 PDF, 🌐 link web sau trage fișier aici</p>
       <p style="font-size:11px;opacity:.6">Offline · Scroll continuu · Pinch zoom</p>
+      <div id="recent-list"></div>
+      <p style="font-size:11px;margin-top:10px"><a href="https://github.com/metusalem969-ro/pdf-editor" target="_blank" rel="noopener" style="color:var(--blue)">📦 Cod sursă GitHub</a></p>
     </div>
     <div id="pages-flow"></div>
   </div>
@@ -444,6 +499,34 @@ input[type=file] { display: none; }
     <div class="actions">
       <button class="btn" id="note-cancel">Anulează</button>
       <button class="btn primary" id="note-ok">OK</button>
+    </div>
+  </div>
+</div>
+
+<div id="url-dialog">
+  <div class="box">
+    <strong>Deschide PDF din web</strong>
+    <input type="url" id="url-inp" placeholder="https://exemplu.ro/document.pdf">
+    <div class="actions" style="margin-top:10px">
+      <button class="btn" id="url-cancel">Anulează</button>
+      <button class="btn primary" id="url-ok">Deschide</button>
+    </div>
+  </div>
+</div>
+
+<div id="help-dialog">
+  <div class="box">
+    <strong>PDF Editor — Ajutor</strong>
+    <ul>
+      <li>📂 PDF local · 🌐 link web</li>
+      <li>Scroll sus/jos prin toate paginile</li>
+      <li>Pinch cu 2 degete = zoom</li>
+      <li>Adnotări salvate automat</li>
+      <li>💾 Export PDF cu modificări</li>
+    </ul>
+    <a href="https://github.com/metusalem969-ro/pdf-editor" target="_blank" rel="noopener">Cod sursă &amp; actualizări → GitHub</a>
+    <div class="actions" style="margin-top:12px">
+      <button class="btn primary" id="help-ok">OK</button>
     </div>
   </div>
 </div>
@@ -767,12 +850,37 @@ viewer.addEventListener('drop', e => {
 });
 
 async function openFile(file) {
-  setLoading(true, 'Se încarcă ' + file.name + '…');
+  const buf = await file.arrayBuffer();
+  await loadPdfBuffer(buf, file.name);
+}
+
+async function openFromUrl(url) {
+  url = (url || '').trim();
+  if (!url) return;
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+  setLoading(true, 'Se descarcă…');
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const buf = await res.arrayBuffer();
+    let name = decodeURIComponent((url.split('/').pop() || 'document.pdf').split('?')[0]);
+    if (!name.toLowerCase().endsWith('.pdf')) name += '.pdf';
+    addRecent({ name, url });
+    await loadPdfBuffer(buf, name);
+    showToast('✅ Descărcat din web');
+  } catch (err) {
+    console.error(err);
+    showToast('❌ ' + (err.message || 'Nu s-a putut descărca'));
+  }
+  setLoading(false);
+}
+
+async function loadPdfBuffer(buf, name) {
+  setLoading(true, 'Se încarcă ' + name + '…');
   try {
     destroyPdf();
-    const buf = await file.arrayBuffer();
     currentFileKey = await hashBuffer(buf);
-    currentFileName = file.name;
+    currentFileName = name;
     annData = {};
 
     pdfDoc = await pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise;
@@ -793,13 +901,79 @@ async function openFile(file) {
     scheduleRefit();
     buildThumbnailPlaceholders();
     scheduleThumbRender(pageNum);
-    showToast('✅ ' + file.name + ' · ' + numPages + ' pagini');
+    showToast('✅ ' + name + ' · ' + numPages + ' pagini');
   } catch (err) {
     console.error(err);
     showToast('❌ ' + (err.message || 'Eroare la încărcare'));
   }
   setLoading(false);
 }
+
+window.openPdfBase64 = async function(b64, name) {
+  try {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    await loadPdfBuffer(bytes.buffer, name || 'document.pdf');
+  } catch (e) {
+    showToast('❌ Eroare la deschidere PDF');
+  }
+};
+
+const RECENT_KEY = 'pdf-editor-recent';
+function addRecent(item) {
+  try {
+    let list = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]');
+    list = list.filter(x => x.url !== item.url);
+    list.unshift({ name: item.name, url: item.url, t: Date.now() });
+    list = list.slice(0, 8);
+    localStorage.setItem(RECENT_KEY, JSON.stringify(list));
+    renderRecentList();
+  } catch (_) {}
+}
+
+function renderRecentList() {
+  const el = document.getElementById('recent-list');
+  let list = [];
+  try { list = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]'); } catch (_) {}
+  if (!list.length) { el.innerHTML = ''; return; }
+  el.innerHTML = '<div style="font-size:11px;color:var(--muted);margin-top:8px">Recente (web):</div>';
+  list.forEach(item => {
+    if (!item.url) return;
+    const b = document.createElement('button');
+    b.className = 'recent-item';
+    b.textContent = item.name || item.url;
+    b.title = item.url;
+    b.onclick = () => openFromUrl(item.url);
+    el.appendChild(b);
+  });
+}
+
+document.getElementById('btn-url').addEventListener('click', () => {
+  document.getElementById('url-inp').value = '';
+  document.getElementById('url-dialog').classList.add('on');
+  document.getElementById('url-inp').focus();
+});
+document.getElementById('url-cancel').addEventListener('click', () => {
+  document.getElementById('url-dialog').classList.remove('on');
+});
+document.getElementById('url-ok').addEventListener('click', () => {
+  const url = document.getElementById('url-inp').value;
+  document.getElementById('url-dialog').classList.remove('on');
+  openFromUrl(url);
+});
+document.getElementById('url-inp').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('url-ok').click();
+});
+
+document.getElementById('btn-help').addEventListener('click', () => {
+  document.getElementById('help-dialog').classList.add('on');
+});
+document.getElementById('help-ok').addEventListener('click', () => {
+  document.getElementById('help-dialog').classList.remove('on');
+});
+
+renderRecentList();
 
 // ── Render page ─────────────────────────────────────────────────────────────
 function viewerPadding() {
