@@ -227,6 +227,11 @@ input[type=range]#size-inp::-webkit-slider-thumb {
   margin: 0 auto;
   width: fit-content;
   max-width: 100%;
+  will-change: transform, opacity;
+  transition: transform 0.28s cubic-bezier(0.25, 0.8, 0.25, 1), opacity 0.22s ease;
+}
+#canvas-wrap.dragging {
+  transition: none;
 }
 #pdf-canvas {
   display: block;
@@ -460,6 +465,12 @@ const THUMB_MAX = 24;
 const thumbCache = new Map();
 const thumbOrder = [];
 
+const PAGE_CACHE_MAX = 8;
+const pagePdfCache = new Map();
+const pageCacheOrder = [];
+let pageChanging = false;
+let swipeDragMode = false;
+
 const pdfCvs = document.getElementById('pdf-canvas');
 const annCvs = document.getElementById('ann-canvas');
 const canvasWrap = document.getElementById('canvas-wrap');
@@ -555,7 +566,77 @@ function destroyPdf() {
   });
   thumbCache.clear();
   thumbOrder.length = 0;
+  pagePdfCache.forEach(e => { if (e.bitmap?.close) e.bitmap.close(); });
+  pagePdfCache.clear();
+  pageCacheOrder.length = 0;
   sidebar.innerHTML = '';
+}
+
+function pageCacheKey(num) {
+  return num + '@' + scale.toFixed(4) + '@' + outputDpr.toFixed(2);
+}
+
+function evictPageCache() {
+  while (pageCacheOrder.length > PAGE_CACHE_MAX) {
+    const k = pageCacheOrder.shift();
+    const e = pagePdfCache.get(k);
+    if (e?.bitmap?.close) e.bitmap.close();
+    pagePdfCache.delete(k);
+  }
+}
+
+function clearPageCache() {
+  pagePdfCache.forEach(e => { if (e?.bitmap?.close) e.bitmap.close(); });
+  pagePdfCache.clear();
+  pageCacheOrder.length = 0;
+}
+
+function preloadAdjacentPages() {
+  if (!pdfDoc) return;
+  [pageNum - 1, pageNum + 1].forEach(n => {
+    if (n >= 1 && n <= numPages) preloadPagePdf(n);
+  });
+}
+
+async function preloadPagePdf(num) {
+  const key = pageCacheKey(num);
+  if (pagePdfCache.has(key)) return;
+  try {
+    const page = await pdfDoc.getPage(num);
+    const vp = page.getViewport({ scale: renderScale() });
+    const c = document.createElement('canvas');
+    c.width = Math.floor(vp.width);
+    c.height = Math.floor(vp.height);
+    await page.render({ canvasContext: c.getContext('2d', { alpha: false }), viewport: vp }).promise;
+    try { page.cleanup(); } catch (_) {}
+    let bitmap;
+    try { bitmap = await createImageBitmap(c); } catch (_) { bitmap = null; }
+    pagePdfCache.set(key, { bitmap, fallback: bitmap ? null : c });
+    pageCacheOrder.push(key);
+    evictPageCache();
+  } catch (_) {}
+}
+
+function animatePageEnter(dir) {
+  return new Promise(resolve => {
+    canvasWrap.classList.remove('dragging');
+    canvasWrap.style.transform = 'translate3d(' + (dir * 28) + '%,0,0)';
+    canvasWrap.style.opacity = '0.55';
+    requestAnimationFrame(() => {
+      canvasWrap.style.transform = 'translate3d(0,0,0)';
+      canvasWrap.style.opacity = '1';
+      setTimeout(resolve, 260);
+    });
+  });
+}
+
+function animatePageExit(dir) {
+  return new Promise(resolve => {
+    canvasWrap.classList.remove('dragging');
+    canvasWrap.style.transform = 'translate3d(' + (-dir * 22) + '%,0,0)';
+    canvasWrap.style.opacity = '0.45';
+    setTimeout(resolve, 160);
+  });
 }
 
 // ── Annotations persistence ─────────────────────────────────────────────────
@@ -679,19 +760,23 @@ function computeFitScale(vp1) {
   return Math.max(0.2, Math.min(5.0, fit));
 }
 
-async function renderPage(num) {
+async function renderPage(num, opts = {}) {
   if (!pdfDoc) return;
   cancelRender();
-  canvasWrap.style.transform = '';
+  if (!opts.keepTransform) {
+    canvasWrap.style.transform = '';
+    canvasWrap.style.opacity = '1';
+  }
   pinchPreviewScale = null;
   delete canvasWrap.dataset.pinchScale;
 
   outputDpr = Math.min(window.devicePixelRatio || 1, 2.5);
+  const key = pageCacheKey(num);
+  const cached = pagePdfCache.get(key);
 
   const page = await pdfDoc.getPage(num);
   const vpRender = page.getViewport({ scale: renderScale() });
   const vpDisplay = page.getViewport({ scale });
-
   const cssW = Math.floor(vpDisplay.width);
   const cssH = Math.floor(vpDisplay.height);
 
@@ -702,15 +787,30 @@ async function renderPage(num) {
   annCvs.style.width = cssW + 'px';
   annCvs.style.height = cssH + 'px';
 
-  renderTask = page.render({ canvasContext: pdfCtx, viewport: vpRender });
-  try {
-    await renderTask.promise;
-  } catch (e) {
-    if (e?.name !== 'RenderingCancelledException') throw e;
-    return;
-  } finally {
-    renderTask = null;
+  if (cached?.bitmap) {
+    pdfCtx.clearRect(0, 0, pdfCvs.width, pdfCvs.height);
+    pdfCtx.drawImage(cached.bitmap, 0, 0);
     try { page.cleanup(); } catch (_) {}
+  } else if (cached?.fallback) {
+    pdfCtx.clearRect(0, 0, pdfCvs.width, pdfCvs.height);
+    pdfCtx.drawImage(cached.fallback, 0, 0);
+    try { page.cleanup(); } catch (_) {}
+  } else {
+    renderTask = page.render({ canvasContext: pdfCtx, viewport: vpRender });
+    try {
+      await renderTask.promise;
+      let bitmap;
+      try { bitmap = await createImageBitmap(pdfCvs); } catch (_) { bitmap = null; }
+      pagePdfCache.set(key, { bitmap, fallback: null });
+      if (!pageCacheOrder.includes(key)) pageCacheOrder.push(key);
+      evictPageCache();
+    } catch (e) {
+      if (e?.name !== 'RenderingCancelledException') throw e;
+      return;
+    } finally {
+      renderTask = null;
+      try { page.cleanup(); } catch (_) {}
+    }
   }
 
   redrawAll(num);
@@ -718,6 +818,7 @@ async function renderPage(num) {
   highlightThumb(num);
   snapBase = null;
   canvasWrap.style.maxWidth = cssW + 'px';
+  if (!opts.skipPreload) preloadAdjacentPages();
 }
 
 function updateNav() {
@@ -730,15 +831,24 @@ function updateNav() {
   jump.value = pageNum;
 }
 
-async function goPage(d) {
-  if (!pdfDoc) return;
+async function goPage(d, instant) {
+  if (!pdfDoc || pageChanging) return;
   const n = pageNum + d;
   if (n < 1 || n > numPages) return;
-  pageNum = n;
-  await renderPage(pageNum);
-  viewer.scrollTop = 0;
-  viewer.scrollLeft = 0;
-  scheduleThumbRender(pageNum);
+  const dir = d > 0 ? 1 : -1;
+  pageChanging = true;
+  try {
+    if (!instant) await animatePageExit(dir);
+    pageNum = n;
+    await renderPage(pageNum);
+    viewer.scrollTop = 0;
+    viewer.scrollLeft = 0;
+    if (!instant) await animatePageEnter(dir);
+    scheduleThumbRender(pageNum);
+  } finally {
+    pageChanging = false;
+    canvasWrap.classList.remove('dragging');
+  }
 }
 
 async function jumpToPage(n) {
@@ -751,13 +861,15 @@ async function jumpToPage(n) {
 }
 
 async function doZoom(d) {
-  if (!pdfDoc) return;
+  if (!pdfDoc || pageChanging) return;
+  clearPageCache();
   scale = Math.max(0.35, Math.min(5.0, scale + d));
   await renderPage(pageNum);
 }
 
 async function fitPage() {
   if (!pdfDoc) return;
+  clearPageCache();
   const page = await pdfDoc.getPage(pageNum);
   const vp1 = page.getViewport({ scale: 1 });
   scale = computeFitScale(vp1);
@@ -1044,6 +1156,7 @@ async function commitPinch() {
   pinchStartDist = 0;
   pinchPointers.clear();
   if (pending && Math.abs(pending - scale) > 0.02) {
+    clearPageCache();
     scale = pending;
     await renderPage(pageNum);
   }
@@ -1073,7 +1186,11 @@ function atScrollEdge() {
 function handleSwipePage(dx, dy, start) {
   const absX = Math.abs(dx);
   const absY = Math.abs(dy);
-  if (Math.max(absX, absY) < SWIPE_MIN) return;
+  if (Math.max(absX, absY) < SWIPE_MIN) {
+    canvasWrap.classList.remove('dragging');
+    canvasWrap.style.transform = '';
+    return;
+  }
 
   const scroll = canScrollViewer();
   const edge = atScrollEdge();
@@ -1081,15 +1198,22 @@ function handleSwipePage(dx, dy, start) {
   const scrolledV = Math.abs(viewer.scrollTop - start.scrollTop) > 20;
 
   if (absX >= absY) {
-    if (scroll.h && scrolledH) return;
+    if (scroll.h && scrolledH) {
+      canvasWrap.style.transform = '';
+      return;
+    }
     if (dx <= -SWIPE_MIN) goPage(1);
     else if (dx >= SWIPE_MIN) goPage(-1);
     return;
   }
 
-  if (scroll.v && scrolledV) return;
+  if (scroll.v && scrolledV) {
+    canvasWrap.style.transform = '';
+    return;
+  }
   if (dy <= -SWIPE_MIN && (edge.bottom || !scroll.v)) goPage(1);
   else if (dy >= SWIPE_MIN && (edge.top || !scroll.v)) goPage(-1);
+  else canvasWrap.style.transform = '';
 }
 
 viewer.addEventListener('touchstart', e => {
@@ -1124,7 +1248,21 @@ viewer.addEventListener('touchmove', e => {
     e.preventDefault();
     return;
   }
-  // 1 deget = scroll liber în viewer (nu blocăm)
+  if (swipeStart && e.touches.length === 1 && curTool === 'scroll' && !pageChanging) {
+    const dx = e.touches[0].clientX - swipeStart.x;
+    const dy = e.touches[0].clientY - swipeStart.y;
+    const absX = Math.abs(dx);
+    const absY = Math.abs(dy);
+    const scroll = canScrollViewer();
+    if (absX > 18 && absX > absY * 1.2 && (!scroll.h || Math.abs(viewer.scrollLeft - swipeStart.scrollLeft) < 12)) {
+      swipeDragMode = true;
+      canvasWrap.classList.add('dragging');
+      const damp = Math.max(-120, Math.min(120, dx * 0.55));
+      canvasWrap.style.transform = 'translate3d(' + damp + 'px,0,0)';
+      canvasWrap.style.opacity = String(1 - Math.min(0.25, absX / 500));
+      e.preventDefault();
+    }
+  }
 }, { passive: false });
 
 viewer.addEventListener('touchend', e => {
@@ -1142,11 +1280,21 @@ viewer.addEventListener('touchend', e => {
   const start = swipeStart;
   swipeStart = null;
 
-  if (dt <= SWIPE_MAX_MS) handleSwipePage(dx, dy, start);
+  if (dt <= SWIPE_MAX_MS || swipeDragMode) handleSwipePage(dx, dy, start);
+  else {
+    canvasWrap.classList.remove('dragging');
+    canvasWrap.style.transform = '';
+    canvasWrap.style.opacity = '1';
+  }
+  swipeDragMode = false;
 }, { passive: true });
 
 viewer.addEventListener('touchcancel', () => {
   swipeStart = null;
+  swipeDragMode = false;
+  canvasWrap.classList.remove('dragging');
+  canvasWrap.style.transform = '';
+  canvasWrap.style.opacity = '1';
   if (pinchActive) commitPinch();
 }, { passive: false });
 
