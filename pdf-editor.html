@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>📄 PDF Editor — METUSALEM969</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --s1: #161b22;
+  --s2: #21262d;
+  --border: #30363d;
+  --accent: #e94560;
+  --blue: #58a6ff;
+  --green: #3fb950;
+  --text: #e6edf3;
+  --muted: #8b949e;
+  --bar: 52px;
+  --radius: 8px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── TOP BAR ─────────────────────────────────────────────────────────────── */
+#topbar {
+  height: var(--bar);
+  background: var(--s1);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex-shrink: 0;
+  scrollbar-width: none;
+}
+#topbar::-webkit-scrollbar { display: none; }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 5px 10px;
+  background: var(--s2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background .12s, border-color .12s;
+}
+.btn:hover  { background: var(--border); }
+.btn:active { background: var(--accent); border-color: var(--accent); }
+.btn:disabled { opacity: .3; cursor: not-allowed; }
+.btn.primary { background: var(--accent); border-color: var(--accent); }
+.btn.primary:hover { filter: brightness(1.1); }
+
+#page-info {
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+  padding: 0 2px;
+  min-width: 60px;
+  text-align: center;
+}
+
+.vline { width: 1px; height: 24px; background: var(--border); flex-shrink: 0; margin: 0 2px; }
+
+/* Color + size inline */
+#color-inp {
+  width: 28px; height: 28px;
+  border: 2px solid var(--border);
+  border-radius: 50%;
+  padding: 1px;
+  background: var(--s2);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+input[type=range]#size-inp {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 68px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  outline: none;
+  flex-shrink: 0;
+}
+input[type=range]#size-inp::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--blue);
+  cursor: pointer;
+}
+
+/* ── VIEWER ──────────────────────────────────────────────────────────────── */
+#viewer {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 16px;
+  background: var(--bg);
+  position: relative;
+}
+
+#dropzone {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  pointer-events: none;
+}
+#dropzone .dz-ico { font-size: 64px; opacity: .25; }
+#dropzone h2 { font-size: 18px; color: var(--muted); font-weight: 600; }
+#dropzone p  { font-size: 13px; color: #484f58; }
+#dropzone kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  background: var(--s2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: monospace;
+  color: var(--text);
+}
+
+#canvas-wrap {
+  position: relative;
+  display: none;
+}
+#pdf-canvas { display: block; box-shadow: 0 8px 40px rgba(0,0,0,.7); }
+#ann-canvas {
+  position: absolute; top: 0; left: 0;
+  display: block;
+  touch-action: none;
+}
+
+/* ── BOTTOM TOOLBAR (TOOLS) ──────────────────────────────────────────────── */
+#bottombar {
+  height: var(--bar);
+  background: var(--s1);
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  flex-shrink: 0;
+  padding: 4px;
+  gap: 2px;
+}
+.tbtn {
+  flex: 1;
+  height: 40px;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  transition: background .12s, color .12s;
+  position: relative;
+}
+.tbtn:hover { background: var(--s2); color: var(--text); }
+.tbtn.active {
+  background: rgba(88, 166, 255, .15);
+  color: var(--blue);
+  border: 1px solid rgba(88, 166, 255, .3);
+}
+.tbtn[data-tip]:after {
+  content: attr(data-tip);
+  position: absolute;
+  top: -28px;
+  background: var(--s2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s;
+}
+.tbtn:hover[data-tip]:after { opacity: 1; }
+
+/* ── OVERLAYS ────────────────────────────────────────────────────────────── */
+#loading {
+  position: fixed; inset: 0;
+  background: rgba(13,17,23,.85);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  font-size: 32px;
+  flex-direction: column;
+  gap: 12px;
+}
+#loading.on { display: flex; }
+#loading span { font-size: 13px; color: var(--muted); }
+
+#toast {
+  position: fixed;
+  bottom: calc(var(--bar) + 10px);
+  left: 50%;
+  transform: translateX(-50%) translateY(6px);
+  background: var(--s2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 13px;
+  padding: 7px 16px;
+  border-radius: 20px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .25s, transform .25s;
+  z-index: 300;
+  white-space: nowrap;
+  max-width: 90vw;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+input[type=file] { display: none; }
+</style>
+</head>
+<body>
+
+<!-- ── TOP BAR ─────────────────────────────────────────────────────────── -->
+<div id="topbar">
+  <input type="file" id="file-inp" accept="application/pdf">
+  <button class="btn primary" onclick="document.getElementById('file-inp').click()">📂 PDF</button>
+  <div class="vline"></div>
+  <button class="btn" id="btn-prev" disabled onclick="goPage(-1)">◀</button>
+  <span id="page-info">— / —</span>
+  <button class="btn" id="btn-next" disabled onclick="goPage(1)">▶</button>
+  <div class="vline"></div>
+  <button class="btn" onclick="doZoom(-0.25)">🔍−</button>
+  <button class="btn" onclick="doZoom(+0.25)">🔍+</button>
+  <button class="btn" onclick="fitPage()">⊡</button>
+  <div class="vline"></div>
+  <input type="color" id="color-inp" value="#e94560" title="Culoare">
+  <input type="range" id="size-inp" min="1" max="24" value="3" title="Grosime">
+  <div class="vline"></div>
+  <button class="btn" onclick="undo()">↩ Undo</button>
+  <button class="btn" onclick="clearPage()">🗑</button>
+  <div class="vline"></div>
+  <button class="btn" id="btn-exp" disabled onclick="exportPDF()">💾 Export PDF</button>
+</div>
+
+<!-- ── VIEWER ──────────────────────────────────────────────────────────── -->
+<div id="viewer"
+     ondragover="event.preventDefault()"
+     ondrop="onDrop(event)">
+  <div id="dropzone">
+    <div class="dz-ico">📄</div>
+    <h2>PDF Editor METUSALEM969</h2>
+    <p>Apasă <kbd>📂 PDF</kbd> sau trage un fișier PDF aici</p>
+    <p style="margin-top:6px;font-size:11px;color:#30363d">PDF.js · jsPDF · Touch-ready</p>
+  </div>
+  <div id="canvas-wrap">
+    <canvas id="pdf-canvas"></canvas>
+    <canvas id="ann-canvas"></canvas>
+  </div>
+</div>
+
+<!-- ── BOTTOM BAR ──────────────────────────────────────────────────────── -->
+<div id="bottombar">
+  <button class="tbtn active" id="t-scroll"  onclick="setTool('scroll')"   data-tip="Scroll">👆</button>
+  <button class="tbtn"        id="t-pen"     onclick="setTool('pen')"      data-tip="Pix">✏️</button>
+  <button class="tbtn"        id="t-marker"  onclick="setTool('marker')"   data-tip="Marker">🖊️</button>
+  <button class="tbtn"        id="t-text"    onclick="setTool('text')"     data-tip="Text">📝</button>
+  <button class="tbtn"        id="t-line"    onclick="setTool('line')"     data-tip="Linie">╱</button>
+  <button class="tbtn"        id="t-rect"    onclick="setTool('rect')"     data-tip="Dreptunghi">⬜</button>
+  <button class="tbtn"        id="t-arrow"   onclick="setTool('arrow')"    data-tip="Săgeată">➤</button>
+  <button class="tbtn"        id="t-eraser"  onclick="setTool('eraser')"   data-tip="Radieră">⬡</button>
+</div>
+
+<!-- ── OVERLAYS ────────────────────────────────────────────────────────── -->
+<div id="loading">⏳ <span id="loading-msg">Se încarcă...</span></div>
+<div id="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+//  INIT
+// ═══════════════════════════════════════════════════════════════════════════
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+// ── State ──────────────────────────────────────────────────────────────────
+let pdfDoc    = null;
+let pageNum   = 1;
+let numPages  = 0;
+let scale     = 1.5;
+let curTool   = 'scroll';
+let isDrawing = false;
+
+// Annotation data: { pageNum → [stroke, ...] }
+// All coords stored in PDF-space (divide by scale on store, multiply on draw)
+let annData   = {};
+let liveStroke = null;   // in-progress stroke
+let snapBase   = null;   // canvas snapshot before live shape preview
+
+const pdfCvs  = document.getElementById('pdf-canvas');
+const annCvs  = document.getElementById('ann-canvas');
+const pdfCtx  = pdfCvs.getContext('2d');
+const annCtx  = annCvs.getContext('2d');
+const viewer  = document.getElementById('viewer');
+const colorEl = document.getElementById('color-inp');
+const sizeEl  = document.getElementById('size-inp');
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+const px2doc = v => v / scale;
+const doc2px = (v, sc) => v * (sc || scale);
+
+function getColor() { return colorEl.value; }
+function getSize()  { return Number(sizeEl.value); }
+
+// ── Toast / Loading ────────────────────────────────────────────────────────
+let toastTimer;
+function showToast(msg, dur = 2500) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), dur);
+}
+
+function setLoading(on, msg = 'Se procesează...') {
+  document.getElementById('loading-msg').textContent = msg;
+  document.getElementById('loading').classList.toggle('on', on);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  FILE LOADING
+// ═══════════════════════════════════════════════════════════════════════════
+document.getElementById('file-inp').addEventListener('change', e => {
+  const f = e.target.files[0];
+  if (f) openFile(f);
+  e.target.value = '';
+});
+
+function onDrop(e) {
+  e.preventDefault();
+  const f = [...e.dataTransfer.files].find(f => f.type === 'application/pdf');
+  if (f) openFile(f);
+}
+
+async function openFile(file) {
+  setLoading(true, `Se încarcă ${file.name}…`);
+  try {
+    const buf = await file.arrayBuffer();
+    pdfDoc   = await pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise;
+    numPages = pdfDoc.numPages;
+    pageNum  = 1;
+    annData  = {};
+    document.getElementById('dropzone').style.display     = 'none';
+    document.getElementById('canvas-wrap').style.display  = 'block';
+    document.getElementById('btn-prev').disabled = false;
+    document.getElementById('btn-next').disabled = false;
+    document.getElementById('btn-exp').disabled  = false;
+    await renderPage(1);
+    showToast(`✅ ${file.name}  ·  ${numPages} pagini`);
+  } catch (err) {
+    showToast('❌ ' + err.message);
+  }
+  setLoading(false);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  RENDER
+// ═══════════════════════════════════════════════════════════════════════════
+async function renderPage(num) {
+  if (!pdfDoc) return;
+  const page = await pdfDoc.getPage(num);
+  const vp   = page.getViewport({ scale });
+
+  pdfCvs.width  = annCvs.width  = vp.width;
+  pdfCvs.height = annCvs.height = vp.height;
+
+  await page.render({ canvasContext: pdfCtx, viewport: vp }).promise;
+  redrawAll(num);
+  updateNav();
+  snapBase = null;
+}
+
+function updateNav() {
+  document.getElementById('page-info').textContent =
+    pdfDoc ? `${pageNum} / ${numPages}` : '— / —';
+  document.getElementById('btn-prev').disabled = !pdfDoc || pageNum <= 1;
+  document.getElementById('btn-next').disabled = !pdfDoc || pageNum >= numPages;
+}
+
+async function goPage(d) {
+  if (!pdfDoc) return;
+  const n = pageNum + d;
+  if (n < 1 || n > numPages) return;
+  pageNum = n;
+  await renderPage(pageNum);
+}
+
+async function doZoom(d) {
+  if (!pdfDoc) return;
+  scale = Math.max(.35, Math.min(4.0, scale + d));
+  await renderPage(pageNum);
+}
+
+async function fitPage() {
+  if (!pdfDoc) return;
+  const page = await pdfDoc.getPage(pageNum);
+  const vp1  = page.getViewport({ scale: 1 });
+  const maxW = viewer.clientWidth - 32;
+  scale = Math.max(.35, Math.min(3.0, maxW / vp1.width));
+  await renderPage(pageNum);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  TOOLS
+// ═══════════════════════════════════════════════════════════════════════════
+function setTool(t) {
+  curTool = t;
+  document.querySelectorAll('.tbtn').forEach(b => b.classList.remove('active'));
+  document.getElementById('t-' + t)?.classList.add('active');
+  // On scroll mode: allow native touch scroll. On draw: intercept.
+  annCvs.style.touchAction  = (t === 'scroll') ? 'auto' : 'none';
+  annCvs.style.cursor = (t === 'scroll') ? 'default' :
+                        (t === 'text')   ? 'text'    :
+                        (t === 'eraser') ? 'crosshair': 'crosshair';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  POINTER EVENTS (mouse + touch)
+// ═══════════════════════════════════════════════════════════════════════════
+function clientPos(e) {
+  const src = e.touches ? e.touches[0] : e;
+  return { cx: src.clientX, cy: src.clientY };
+}
+
+function canvasPos(e) {
+  const rect = annCvs.getBoundingClientRect();
+  const { cx, cy } = clientPos(e);
+  const rx = annCvs.width  / rect.width;
+  const ry = annCvs.height / rect.height;
+  return { x: (cx - rect.left) * rx, y: (cy - rect.top) * ry };
+}
+
+annCvs.addEventListener('mousedown',  onStart, false);
+annCvs.addEventListener('mousemove',  onMove,  false);
+annCvs.addEventListener('mouseup',    onEnd,   false);
+annCvs.addEventListener('mouseleave', onEnd,   false);
+annCvs.addEventListener('touchstart', e => { e.preventDefault(); onStart(e); }, { passive: false });
+annCvs.addEventListener('touchmove',  e => { e.preventDefault(); onMove(e);  }, { passive: false });
+annCvs.addEventListener('touchend',   e => { e.preventDefault(); onEnd(e);   }, { passive: false });
+
+function onStart(e) {
+  if (curTool === 'scroll') return;
+  const { x, y } = canvasPos(e);
+  isDrawing = true;
+
+  if (curTool === 'text') {
+    isDrawing = false;
+    promptText(x, y);
+    return;
+  }
+
+  const docX = px2doc(x), docY = px2doc(y);
+
+  if (curTool === 'pen' || curTool === 'eraser') {
+    liveStroke = {
+      type:  curTool,
+      color: curTool === 'eraser' ? null : getColor(),
+      size:  getSize(),
+      pts:   [{ x: docX, y: docY }],
+      lastX: x, lastY: y   // canvas px for incremental draw
+    };
+    // Kick off first dot
+    drawIncrementalPt(x, y, x, y);
+  } else {
+    // Shape stroke — take snapshot to restore during preview
+    snapBase = annCtx.getImageData(0, 0, annCvs.width, annCvs.height);
+    liveStroke = {
+      type:  curTool,
+      color: getColor(),
+      size:  getSize(),
+      x: docX, y: docY, x2: docX, y2: docY
+    };
+  }
+}
+
+function onMove(e) {
+  if (!isDrawing || curTool === 'scroll') return;
+  const { x, y } = canvasPos(e);
+
+  if (curTool === 'pen' || curTool === 'eraser') {
+    drawIncrementalPt(liveStroke.lastX, liveStroke.lastY, x, y);
+    liveStroke.pts.push({ x: px2doc(x), y: px2doc(y) });
+    liveStroke.lastX = x;
+    liveStroke.lastY = y;
+  } else {
+    // Restore snapshot and redraw live shape
+    if (snapBase) annCtx.putImageData(snapBase, 0, 0);
+    liveStroke.x2 = px2doc(x);
+    liveStroke.y2 = px2doc(y);
+    drawStroke(annCtx, liveStroke);
+  }
+}
+
+function onEnd(e) {
+  if (!isDrawing) return;
+  isDrawing = false;
+  if (!liveStroke) return;
+  if (!annData[pageNum]) annData[pageNum] = [];
+  // Remove incremental canvas coords (not needed for storage)
+  const s = { ...liveStroke };
+  delete s.lastX; delete s.lastY;
+  annData[pageNum].push(s);
+  liveStroke = null;
+  snapBase   = null;
+  redrawAll(pageNum);
+}
+
+// Incremental pen/eraser draw (fast, avoids full redraw every frame)
+function drawIncrementalPt(x1, y1, x2, y2) {
+  annCtx.save();
+  const isE = curTool === 'eraser';
+  if (isE) annCtx.globalCompositeOperation = 'destination-out';
+  annCtx.strokeStyle = isE ? 'rgba(0,0,0,1)' : getColor();
+  annCtx.lineWidth   = getSize();
+  annCtx.lineCap     = 'round';
+  annCtx.lineJoin    = 'round';
+  annCtx.beginPath();
+  annCtx.moveTo(x1, y1);
+  annCtx.lineTo(x2, y2);
+  annCtx.stroke();
+  annCtx.restore();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  DRAW STROKES (PDF-space coords → canvas px)
+// ═══════════════════════════════════════════════════════════════════════════
+function drawStroke(ctx, s, sc) {
+  sc = sc || scale;
+  ctx.save();
+  ctx.lineCap  = 'round';
+  ctx.lineJoin = 'round';
+
+  const lw = s.size; // size in canvas px (stored at draw-time, looks same at any zoom when redrawn at sc)
+  // Adjust for scale difference: s was drawn at `scale`, now sc might differ
+  const scaledLW = lw * sc / (s.drawScale || scale);
+
+  if (s.type === 'eraser') {
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.strokeStyle = 'rgba(0,0,0,1)';
+    ctx.lineWidth   = Math.max(1, scaledLW * 4);
+    ctx.beginPath();
+    (s.pts || []).forEach((p, i) => {
+      const px = p.x * sc, py = p.y * sc;
+      i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+    ctx.globalCompositeOperation = 'source-over';
+
+  } else if (s.type === 'pen') {
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth   = Math.max(1, scaledLW);
+    ctx.beginPath();
+    (s.pts || []).forEach((p, i) => {
+      const px = p.x * sc, py = p.y * sc;
+      i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+
+  } else if (s.type === 'marker') {
+    const [r, g, b] = hexRGB(s.color);
+    ctx.fillStyle = `rgba(${r},${g},${b},0.33)`;
+    const x = Math.min(s.x, s.x2) * sc;
+    const y = Math.min(s.y, s.y2) * sc;
+    const w = Math.abs(s.x2 - s.x) * sc;
+    const h = Math.abs(s.y2 - s.y) * sc;
+    if (w > 0 && h > 0) ctx.fillRect(x, y, w, h);
+
+  } else if (s.type === 'line') {
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth   = Math.max(1, scaledLW);
+    ctx.beginPath();
+    ctx.moveTo(s.x * sc, s.y * sc);
+    ctx.lineTo(s.x2 * sc, s.y2 * sc);
+    ctx.stroke();
+
+  } else if (s.type === 'rect') {
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth   = Math.max(1, scaledLW);
+    const x = Math.min(s.x, s.x2) * sc;
+    const y = Math.min(s.y, s.y2) * sc;
+    const w = Math.abs(s.x2 - s.x) * sc;
+    const h = Math.abs(s.y2 - s.y) * sc;
+    if (w > 0 && h > 0) ctx.strokeRect(x, y, w, h);
+
+  } else if (s.type === 'arrow') {
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth   = Math.max(1, scaledLW);
+    const fx = s.x  * sc, fy = s.y  * sc;
+    const tx = s.x2 * sc, ty = s.y2 * sc;
+    const ang = Math.atan2(ty - fy, tx - fx);
+    const hl  = Math.max(10, scaledLW * 5);
+    ctx.beginPath();
+    ctx.moveTo(fx, fy);
+    ctx.lineTo(tx, ty);
+    ctx.moveTo(tx - hl * Math.cos(ang - Math.PI/7), ty - hl * Math.sin(ang - Math.PI/7));
+    ctx.lineTo(tx, ty);
+    ctx.lineTo(tx - hl * Math.cos(ang + Math.PI/7), ty - hl * Math.sin(ang + Math.PI/7));
+    ctx.stroke();
+
+  } else if (s.type === 'text') {
+    const fs = Math.max(10, scaledLW * 4 + 8);
+    ctx.font      = `${fs}px system-ui`;
+    ctx.fillStyle = s.color;
+    ctx.fillText(s.text, s.x * sc, s.y * sc);
+  }
+
+  ctx.restore();
+}
+
+function redrawAll(num) {
+  annCtx.clearRect(0, 0, annCvs.width, annCvs.height);
+  (annData[num] || []).forEach(s => drawStroke(annCtx, s));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ANNOTATION ACTIONS
+// ═══════════════════════════════════════════════════════════════════════════
+function undo() {
+  if (!annData[pageNum]?.length) { showToast('Nimic de anulat'); return; }
+  annData[pageNum].pop();
+  redrawAll(pageNum);
+  showToast('↩ Anulat');
+}
+
+function clearPage() {
+  if (!annData[pageNum]?.length) return;
+  if (!confirm('Șterge toate adnotările de pe pagina curentă?')) return;
+  annData[pageNum] = [];
+  redrawAll(pageNum);
+  showToast('🗑 Pagina curată');
+}
+
+function promptText(cx, cy) {
+  const txt = prompt('Text:');
+  if (!txt?.trim()) return;
+  if (!annData[pageNum]) annData[pageNum] = [];
+  annData[pageNum].push({
+    type: 'text', color: getColor(), size: getSize(),
+    text: txt.trim(),
+    x: px2doc(cx), y: px2doc(cy),
+    drawScale: scale
+  });
+  redrawAll(pageNum);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  EXPORT TO PDF
+// ═══════════════════════════════════════════════════════════════════════════
+async function exportPDF() {
+  if (!pdfDoc) return;
+  setLoading(true, 'Se generează PDF-ul…');
+
+  try {
+    const { jsPDF } = window.jspdf;
+    const EXP_SCALE = 2.0;
+    const tmpPdf = document.createElement('canvas');
+    const tmpAnn = document.createElement('canvas');
+    const ctxP   = tmpPdf.getContext('2d');
+    const ctxA   = tmpAnn.getContext('2d');
+    let pdf = null;
+
+    for (let p = 1; p <= numPages; p++) {
+      setLoading(true, `Export pagina ${p} / ${numPages}…`);
+      const page = await pdfDoc.getPage(p);
+      const vp   = page.getViewport({ scale: EXP_SCALE });
+
+      tmpPdf.width  = tmpAnn.width  = vp.width;
+      tmpPdf.height = tmpAnn.height = vp.height;
+
+      // Render PDF page at export scale
+      await page.render({ canvasContext: ctxP, viewport: vp }).promise;
+
+      // Draw annotations at export scale
+      ctxA.clearRect(0, 0, vp.width, vp.height);
+      (annData[p] || []).forEach(s => drawStroke(ctxA, s, EXP_SCALE));
+
+      // Merge
+      ctxP.drawImage(tmpAnn, 0, 0);
+
+      const imgData = tmpPdf.toDataURL('image/jpeg', 0.93);
+      const orient  = vp.width > vp.height ? 'l' : 'p';
+
+      if (p === 1) {
+        pdf = new jsPDF({ orientation: orient, unit: 'px', format: [vp.width, vp.height] });
+      } else {
+        pdf.addPage([vp.width, vp.height], orient);
+      }
+      pdf.addImage(imgData, 'JPEG', 0, 0, vp.width, vp.height);
+    }
+
+    pdf.save('adnotat.pdf');
+    showToast('✅ PDF exportat cu succes!');
+  } catch (err) {
+    showToast('❌ ' + err.message);
+    console.error(err);
+  }
+
+  setLoading(false);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  UTILS
+// ═══════════════════════════════════════════════════════════════════════════
+function hexRGB(hex) {
+  const n = parseInt(hex.replace('#',''), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+// ── Keyboard shortcuts ────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (!pdfDoc) return;
+  const k = e.key;
+  if (k === 'ArrowLeft'  || k === 'PageUp')   { goPage(-1);   return; }
+  if (k === 'ArrowRight' || k === 'PageDown')  { goPage(+1);   return; }
+  if (k === '+' || k === '=')  doZoom(+0.25);
+  if (k === '-')               doZoom(-0.25);
+  if (k === 'f' || k === 'F')  fitPage();
+  if (e.ctrlKey && k === 'z')  { e.preventDefault(); undo(); }
+  if (k === '1') setTool('scroll');
+  if (k === '2') setTool('pen');
+  if (k === '3') setTool('marker');
+  if (k === '4') setTool('text');
+  if (k === '5') setTool('line');
+  if (k === '6') setTool('rect');
+  if (k === '7') setTool('arrow');
+  if (k === '8') setTool('eraser');
+});
+
+// ── Init ──────────────────────────────────────────────────────────────────
+setTool('scroll');
+updateNav();
+</script>
+</body>
+</html>
