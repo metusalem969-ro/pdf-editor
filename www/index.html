@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ro" data-theme="dark">
+<html lang="ro" data-theme="light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes, viewport-fit=cover">
@@ -50,14 +50,21 @@ body {
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 0 8px;
-  overflow-x: auto;
-  overflow-y: hidden;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 0 6px;
   flex-shrink: 0;
-  scrollbar-width: none;
+  overflow: hidden;
 }
-#topbar::-webkit-scrollbar { display: none; }
+.bar-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 1;
+  min-width: 0;
+}
+.bar-left { justify-content: flex-start; }
+.bar-right { justify-content: flex-end; }
 
 .btn {
   display: inline-flex; align-items: center; gap: 4px;
@@ -226,18 +233,17 @@ input[type=range]#size-inp::-webkit-slider-thumb {
   border-top: 1px solid var(--border);
   display: flex;
   align-items: center;
-  justify-content: space-around;
+  justify-content: space-between;
   flex-shrink: 0;
-  padding: 4px;
-  gap: 2px;
-  overflow-x: auto;
-  scrollbar-width: none;
+  padding: 4px 6px;
+  gap: 6px;
+  overflow: hidden;
 }
-#bottombar::-webkit-scrollbar { display: none; }
 
 .tbtn {
-  flex: 1;
-  min-width: 40px;
+  flex: 0 0 auto;
+  width: 40px;
+  min-width: 36px;
   height: 40px;
   background: none;
   border: none;
@@ -327,32 +333,41 @@ input[type=range]#size-inp::-webkit-slider-thumb {
 #note-dialog .actions { display: flex; gap: 8px; margin-top: 10px; justify-content: flex-end; }
 
 input[type=file] { display: none; }
+
+@media (max-width: 520px) {
+  .btn { padding: 5px 7px; font-size: 11px; }
+  input[type=range]#size-inp { width: 48px; }
+  #page-info { min-width: 56px; padding: 4px 4px; font-size: 11px; }
+  .vline { margin: 0 1px; }
+}
 </style>
 </head>
 <body>
 
 <div id="topbar">
   <input type="file" id="file-inp" accept="application/pdf,.pdf">
-  <button class="btn primary" id="btn-open">📂 PDF</button>
-  <button class="btn" id="btn-thumbs" title="Miniaturi">🖼</button>
-  <div class="vline"></div>
-  <button class="btn" id="btn-prev" disabled>◀</button>
-  <span id="page-info" title="Apasă pentru salt la pagină">— / —</span>
-  <input type="number" id="page-jump" min="1" value="1">
-  <button class="btn" id="btn-next" disabled>▶</button>
-  <div class="vline"></div>
-  <button class="btn" id="btn-zoom-out">🔍−</button>
-  <button class="btn" id="btn-zoom-in">🔍+</button>
-  <button class="btn" id="btn-fit">⊡</button>
-  <div class="vline"></div>
-  <input type="color" id="color-inp" value="#e94560" title="Culoare">
-  <input type="range" id="size-inp" min="1" max="48" value="12" title="Grosime">
-  <div class="vline"></div>
-  <button class="btn" id="btn-undo">↩</button>
-  <button class="btn" id="btn-clear">🗑</button>
-  <div class="vline"></div>
-  <button class="btn" id="btn-theme" title="Temă">🌓</button>
-  <button class="btn" id="btn-exp" disabled>💾 Export</button>
+  <div class="bar-group bar-left">
+    <button class="btn primary" id="btn-open">📂 PDF</button>
+    <button class="btn" id="btn-thumbs" title="Miniaturi">🖼</button>
+    <div class="vline"></div>
+    <button class="btn" id="btn-prev" disabled>◀</button>
+    <span id="page-info" title="Apasă pentru salt la pagină">— / —</span>
+    <input type="number" id="page-jump" min="1" value="1">
+    <button class="btn" id="btn-next" disabled>▶</button>
+  </div>
+  <div class="bar-group bar-right">
+    <button class="btn" id="btn-zoom-out">🔍−</button>
+    <button class="btn" id="btn-zoom-in">🔍+</button>
+    <button class="btn" id="btn-fit">⊡</button>
+    <div class="vline"></div>
+    <input type="color" id="color-inp" value="#e94560" title="Culoare">
+    <input type="range" id="size-inp" min="1" max="48" value="12" title="Grosime">
+    <div class="vline"></div>
+    <button class="btn" id="btn-undo">↩</button>
+    <button class="btn" id="btn-clear">🗑</button>
+    <button class="btn" id="btn-theme" title="Temă">🌓</button>
+    <button class="btn" id="btn-exp" disabled>💾</button>
+  </div>
 </div>
 
 <div id="main">
@@ -372,15 +387,19 @@ input[type=file] { display: none; }
 </div>
 
 <div id="bottombar">
-  <button class="tbtn active" id="t-scroll" data-tool="scroll" title="Scroll">👆</button>
-  <button class="tbtn" id="t-pen" data-tool="pen" title="Pix">✏️</button>
-  <button class="tbtn" id="t-marker" data-tool="marker" title="Marker">🖊️</button>
-  <button class="tbtn" id="t-text" data-tool="text" title="Text">📝</button>
-  <button class="tbtn" id="t-note" data-tool="note" title="Notă adezivă">📌</button>
-  <button class="tbtn" id="t-line" data-tool="line" title="Linie">╱</button>
-  <button class="tbtn" id="t-rect" data-tool="rect" title="Dreptunghi">⬜</button>
-  <button class="tbtn" id="t-arrow" data-tool="arrow" title="Săgeată">➤</button>
-  <button class="tbtn" id="t-eraser" data-tool="eraser" title="Radieră">⬡</button>
+  <div class="bar-group bar-left">
+    <button class="tbtn active" id="t-scroll" data-tool="scroll" title="Scroll">👆</button>
+    <button class="tbtn" id="t-pen" data-tool="pen" title="Pix">✏️</button>
+    <button class="tbtn" id="t-marker" data-tool="marker" title="Marker">🖊️</button>
+    <button class="tbtn" id="t-text" data-tool="text" title="Text">📝</button>
+    <button class="tbtn" id="t-note" data-tool="note" title="Notă adezivă">📌</button>
+  </div>
+  <div class="bar-group bar-right">
+    <button class="tbtn" id="t-line" data-tool="line" title="Linie">╱</button>
+    <button class="tbtn" id="t-rect" data-tool="rect" title="Dreptunghi">⬜</button>
+    <button class="tbtn" id="t-arrow" data-tool="arrow" title="Săgeată">➤</button>
+    <button class="tbtn" id="t-eraser" data-tool="eraser" title="Radieră">⬡</button>
+  </div>
 </div>
 
 <div id="loading">⏳ <span id="loading-msg">Se încarcă...</span></div>
@@ -442,7 +461,7 @@ let pinchPointers = new Map();
 
 // ── Theme ───────────────────────────────────────────────────────────────────
 function loadTheme() {
-  const t = localStorage.getItem('pdf-editor-theme') || 'dark';
+  const t = localStorage.getItem('pdf-editor-theme') || 'light';
   document.documentElement.setAttribute('data-theme', t);
 }
 function toggleTheme() {
