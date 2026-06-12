@@ -199,11 +199,12 @@ input[type=range]#size-inp::-webkit-slider-thumb {
   display: flex;
   justify-content: center;
   align-items: flex-start;
-  padding: 16px;
+  padding: 12px;
   background: var(--bg);
   position: relative;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
+  touch-action: pan-x pan-y;
 }
 
 #dropzone {
@@ -223,10 +224,16 @@ input[type=range]#size-inp::-webkit-slider-thumb {
 #canvas-wrap {
   position: relative;
   display: none;
-  transform-origin: center top;
-  touch-action: none;
+  transform-origin: center center;
+  flex-shrink: 0;
 }
-#pdf-canvas { display: block; box-shadow: 0 8px 40px rgba(0,0,0,.35); max-width: none; }
+#pdf-canvas {
+  display: block;
+  box-shadow: 0 8px 40px rgba(0,0,0,.2);
+  max-width: none;
+  width: auto;
+  height: auto;
+}
 #ann-canvas {
   position: absolute; top: 0; left: 0;
   display: block;
@@ -436,7 +443,8 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = 'lib/pdf.worker.min.js';
 let pdfDoc = null;
 let pageNum = 1;
 let numPages = 0;
-let scale = 1.5;
+let scale = 1;
+let pinchPreviewScale = null;
 let curTool = 'scroll';
 let isDrawing = false;
 let activePointerId = null;
@@ -613,7 +621,7 @@ async function openFile(file) {
     document.getElementById('btn-next').disabled = false;
     document.getElementById('btn-exp').disabled = false;
 
-    await renderPage(1);
+    await fitPage();
     buildThumbnailPlaceholders();
     scheduleThumbRender(pageNum);
     showToast('✅ ' + file.name + ' · ' + numPages + ' pagini');
@@ -625,14 +633,35 @@ async function openFile(file) {
 }
 
 // ── Render page ─────────────────────────────────────────────────────────────
+function viewerPadding() {
+  return 24;
+}
+
+function computeFitScale(vp1) {
+  const pad = viewerPadding();
+  const maxW = Math.max(100, viewer.clientWidth - pad);
+  const maxH = Math.max(100, viewer.clientHeight - pad);
+  const scaleW = maxW / vp1.width;
+  const scaleH = maxH / vp1.height;
+  return Math.max(0.25, Math.min(5.0, Math.min(scaleW, scaleH)));
+}
+
 async function renderPage(num) {
   if (!pdfDoc) return;
   cancelRender();
+  canvasWrap.style.transform = '';
+  pinchPreviewScale = null;
+  delete canvasWrap.dataset.pinchScale;
+
   const page = await pdfDoc.getPage(num);
   const vp = page.getViewport({ scale });
 
-  pdfCvs.width = annCvs.width = vp.width;
-  pdfCvs.height = annCvs.height = vp.height;
+  pdfCvs.width = annCvs.width = Math.floor(vp.width);
+  pdfCvs.height = annCvs.height = Math.floor(vp.height);
+  pdfCvs.style.width = Math.floor(vp.width) + 'px';
+  pdfCvs.style.height = Math.floor(vp.height) + 'px';
+  annCvs.style.width = pdfCvs.style.width;
+  annCvs.style.height = pdfCvs.style.height;
 
   renderTask = page.render({ canvasContext: pdfCtx, viewport: vp });
   try {
@@ -689,10 +718,11 @@ async function fitPage() {
   if (!pdfDoc) return;
   const page = await pdfDoc.getPage(pageNum);
   const vp1 = page.getViewport({ scale: 1 });
+  scale = computeFitScale(vp1);
   try { page.cleanup(); } catch (_) {}
-  const maxW = viewer.clientWidth - 32;
-  scale = Math.max(0.35, Math.min(4.0, maxW / vp1.width));
   await renderPage(pageNum);
+  viewer.scrollTop = 0;
+  viewer.scrollLeft = 0;
 }
 
 // Page jump UI
@@ -822,7 +852,7 @@ function setTool(t) {
   const drawing = t !== 'scroll';
   annCvs.style.pointerEvents = drawing ? 'auto' : 'none';
   annCvs.style.touchAction = drawing ? 'none' : 'auto';
-  canvasWrap.style.touchAction = drawing ? 'none' : 'pan-x pan-y pinch-zoom';
+  viewer.style.touchAction = drawing ? 'pan-x pan-y' : 'pan-x pan-y';
   annCvs.style.cursor = t === 'text' || t === 'note' ? 'text' : (t === 'eraser' ? 'cell' : (drawing ? 'crosshair' : 'default'));
 }
 
@@ -843,17 +873,6 @@ function pointerPos(e) {
 
 function onPointerDown(e) {
   if (curTool === 'scroll' || pinchActive) return;
-  if (e.pointerType === 'touch' && pinchPointers.size >= 1) return;
-
-  if (e.pointerType === 'touch') {
-    pinchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (pinchPointers.size === 2) {
-      isDrawing = false;
-      liveStroke = null;
-      return;
-    }
-  }
-
   if (activePointerId !== null) return;
   activePointerId = e.pointerId;
   try { annCvs.setPointerCapture(e.pointerId); } catch (_) {}
@@ -958,7 +977,65 @@ annCvs.addEventListener('pointerup', onPointerUp);
 annCvs.addEventListener('pointercancel', onPointerUp);
 annCvs.addEventListener('pointerleave', e => { if (e.pointerId === activePointerId) onPointerUp(e); });
 
-// ── Pinch-to-zoom on canvas wrap ────────────────────────────────────────────
+// ── Pinch-to-zoom (touch events — reliable on Android WebView) ──────────────
+function touchDist(touches) {
+  const dx = touches[0].clientX - touches[1].clientX;
+  const dy = touches[0].clientY - touches[1].clientY;
+  return Math.hypot(dx, dy);
+}
+
+function applyPinchPreview(newScale) {
+  pinchPreviewScale = newScale;
+  canvasWrap.style.transform = 'scale(' + (newScale / scale) + ')';
+  canvasWrap.dataset.pinchScale = String(newScale);
+}
+
+async function commitPinch() {
+  const pending = parseFloat(canvasWrap.dataset.pinchScale);
+  canvasWrap.style.transform = '';
+  pinchPreviewScale = null;
+  delete canvasWrap.dataset.pinchScale;
+  pinchActive = false;
+  pinchStartDist = 0;
+  pinchPointers.clear();
+  if (pending && Math.abs(pending - scale) > 0.02) {
+    scale = pending;
+    await renderPage(pageNum);
+  }
+}
+
+viewer.addEventListener('touchstart', e => {
+  if (!pdfDoc || curTool !== 'scroll') return;
+  if (e.touches.length === 2) {
+    pinchActive = true;
+    pinchStartDist = touchDist(e.touches);
+    pinchStartScale = scale;
+    isDrawing = false;
+    liveStroke = null;
+    activePointerId = null;
+    e.preventDefault();
+  }
+}, { passive: false });
+
+viewer.addEventListener('touchmove', e => {
+  if (!pdfDoc || !pinchActive || e.touches.length !== 2 || pinchStartDist <= 0) return;
+  const dist = touchDist(e.touches);
+  const ratio = dist / pinchStartDist;
+  const newScale = Math.max(0.25, Math.min(5.0, pinchStartScale * ratio));
+  applyPinchPreview(newScale);
+  e.preventDefault();
+}, { passive: false });
+
+viewer.addEventListener('touchend', e => {
+  if (!pinchActive) return;
+  if (e.touches.length < 2) commitPinch();
+}, { passive: false });
+
+viewer.addEventListener('touchcancel', () => {
+  if (pinchActive) commitPinch();
+}, { passive: false });
+
+// Pointer pinch fallback (desktop trackpad / some browsers)
 function pinchDistance() {
   const pts = [...pinchPointers.values()];
   if (pts.length < 2) return 0;
@@ -968,53 +1045,34 @@ function pinchDistance() {
 }
 
 canvasWrap.addEventListener('pointerdown', e => {
-  if (e.pointerType !== 'touch') return;
+  if (!pdfDoc || curTool !== 'scroll') return;
   pinchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (pinchPointers.size === 2) {
     pinchActive = true;
     pinchStartDist = pinchDistance();
     pinchStartScale = scale;
-    isDrawing = false;
-    liveStroke = null;
-    activePointerId = null;
-    try { canvasWrap.setPointerCapture(e.pointerId); } catch (_) {}
     e.preventDefault();
   }
 }, { passive: false });
-
-let pinchRenderTimer = null;
 
 canvasWrap.addEventListener('pointermove', e => {
-  if (!pinchPointers.has(e.pointerId)) return;
+  if (!pinchActive || !pinchPointers.has(e.pointerId)) return;
   pinchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (pinchPointers.size === 2 && pinchStartDist > 0) {
-    const dist = pinchDistance();
-    const ratio = dist / pinchStartDist;
-    const newScale = Math.max(0.35, Math.min(5.0, pinchStartScale * ratio));
-    canvasWrap.style.transform = 'scale(' + (newScale / scale) + ')';
-    canvasWrap.dataset.pinchScale = newScale;
-    clearTimeout(pinchRenderTimer);
-    pinchRenderTimer = setTimeout(() => {}, 0);
+    const ratio = pinchDistance() / pinchStartDist;
+    applyPinchPreview(Math.max(0.25, Math.min(5.0, pinchStartScale * ratio)));
     e.preventDefault();
   }
 }, { passive: false });
 
-async function endPinch(e) {
+canvasWrap.addEventListener('pointerup', e => {
   pinchPointers.delete(e.pointerId);
-  if (pinchPointers.size < 2) {
-    pinchActive = false;
-    pinchStartDist = 0;
-    const pending = parseFloat(canvasWrap.dataset.pinchScale);
-    canvasWrap.style.transform = '';
-    delete canvasWrap.dataset.pinchScale;
-    if (pending && Math.abs(pending - scale) > 0.02) {
-      scale = pending;
-      await renderPage(pageNum);
-    }
-  }
-}
-canvasWrap.addEventListener('pointerup', endPinch);
-canvasWrap.addEventListener('pointercancel', endPinch);
+  if (pinchActive && pinchPointers.size < 2) commitPinch();
+});
+canvasWrap.addEventListener('pointercancel', e => {
+  pinchPointers.delete(e.pointerId);
+  if (pinchActive && pinchPointers.size < 2) commitPinch();
+});
 
 // ── Drawing helpers ─────────────────────────────────────────────────────────
 function drawPenSegment(x1, y1, x2, y2, stroke) {
