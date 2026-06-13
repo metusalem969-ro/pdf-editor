@@ -252,11 +252,16 @@ input[type=range]#size-inp::-webkit-slider-thumb {
   flex-direction: column;
   position: absolute;
   inset: 0;
-  z-index: 1;
+  z-index: 5;
   background: var(--bg);
+  height: 100%;
+  min-height: 100%;
 }
 #web-panel.on { display: flex; }
 body.web-mode #viewer { overflow: hidden; }
+body.web-mode #toolbar .bar-row:nth-child(2) { display: none; }
+body.web-mode #bottombar { display: none !important; }
+body.web-mode #sidebar { display: none !important; }
 .web-bar {
   display: flex;
   gap: 6px;
@@ -300,19 +305,25 @@ body.web-mode #viewer { overflow: hidden; }
   flex: 1;
   min-height: 0;
   position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 #web-frame {
+  flex: 1;
   width: 100%;
+  min-height: 0;
   height: 100%;
   border: none;
   background: #fff;
   display: block;
 }
-#web-frame.hidden { display: none; }
+#web-frame.hidden { display: none !important; }
 #web-source {
   display: none;
-  position: absolute;
-  inset: 0;
+  flex: 1;
+  width: 100%;
+  min-height: 0;
   margin: 0;
   padding: 12px;
   overflow: auto;
@@ -326,7 +337,11 @@ body.web-mode #viewer { overflow: hidden; }
   border: none;
   -webkit-overflow-scrolling: touch;
 }
-#web-source.on { display: block; }
+#web-source.on {
+  display: block;
+  position: absolute;
+  inset: 0;
+}
 
 #pages-flow {
   display: none;
@@ -1044,27 +1059,70 @@ function setWebTab(tab) {
     frame.classList.add('hidden');
     sourceEl.classList.add('on');
   } else {
-    frame.classList.remove('hidden');
     sourceEl.classList.remove('on');
+    frame.classList.remove('hidden');
+    if (webIsLocal && localHtmlSource) {
+      renderLocalHtmlFrame(frame, localHtmlSource);
+    }
   }
 }
 
 function prepareLocalHtml(html) {
   const inject = '<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">';
   if (/<meta[^>]+name=["']viewport/i.test(html)) return html;
-  if (/<head[^>]*>/i.test(html)) return html.replace(/<head([^>]*)>/i, `<head$1>${inject}`);
-  if (/<html[^>]*>/i.test(html)) return html.replace(/<html([^>]*)>/i, `<html$1><head>${inject}</head>`);
+  if (/<head[^>]*>/i.test(html)) {
+    return html.replace(/<head([^>]*)>/i, (m, attrs) => '<head' + attrs + '>' + inject);
+  }
+  if (/<html[^>]*>/i.test(html)) {
+    return html.replace(/<html([^>]*)>/i, (m, attrs) => '<html' + attrs + '><head>' + inject + '</head>');
+  }
   return inject + html;
 }
 
-function renderWebFrame(frame, { local, url, source }) {
-  frame.src = 'about:blank';
+function writeHtmlToFrame(frame, html) {
+  const doc = frame.contentDocument || frame.contentWindow?.document;
+  if (!doc) return false;
+  doc.open();
+  doc.write(html);
+  doc.close();
+  return true;
+}
+
+function renderLocalHtmlFrame(frame, source) {
+  const html = prepareLocalHtml(source);
   frame.removeAttribute('srcdoc');
-  if (local && source) {
-    frame.srcdoc = prepareLocalHtml(source);
+  frame.classList.remove('hidden');
+
+  const apply = () => {
+    if (writeHtmlToFrame(frame, html)) return;
+    try {
+      frame.removeAttribute('src');
+      frame.srcdoc = html;
+    } catch (_) {
+      frame.src = 'data:text/html;charset=utf-8,' + encodeURIComponent(html);
+    }
+  };
+
+  if (frame.contentDocument) {
+    apply();
     return;
   }
-  if (url) frame.src = url;
+
+  frame.onload = () => {
+    frame.onload = null;
+    apply();
+  };
+  frame.src = 'about:blank';
+}
+
+function renderWebFrame(frame, { local, url, source }) {
+  frame.removeAttribute('srcdoc');
+  if (local && source) {
+    renderLocalHtmlFrame(frame, source);
+    return;
+  }
+  frame.onload = null;
+  frame.src = url || 'about:blank';
 }
 
 async function openWebPage({ url, source, name, fetchOk = true, local = false }) {
@@ -1096,7 +1154,7 @@ async function openWebPage({ url, source, name, fetchOk = true, local = false })
   }
 
   setWebTab('page');
-  renderWebFrame(frame, { local, url, source });
+  requestAnimationFrame(() => renderWebFrame(frame, { local, url, source }));
   showToast(local ? '📄 ' + (name || 'HTML local') : '🌐 ' + (name || 'Pagină web'));
 }
 
@@ -1306,9 +1364,10 @@ bindTap(document.getElementById('web-refresh'), () => {
   const frame = document.getElementById('web-frame');
   if (!frame) return;
   if (webIsLocal && localHtmlSource) {
-    renderWebFrame(frame, { local: true, source: localHtmlSource });
+    renderLocalHtmlFrame(frame, localHtmlSource);
   } else if (currentWebUrl) {
-    renderWebFrame(frame, { local: false, url: currentWebUrl });
+    frame.onload = null;
+    frame.src = currentWebUrl;
   }
 });
 
