@@ -247,21 +247,21 @@ input[type=range]#size-inp::-webkit-slider-thumb {
 #dropzone h2 { font-size: 18px; color: var(--muted); font-weight: 600; }
 #dropzone p  { font-size: 13px; color: var(--muted); opacity: .7; }
 
-#web-panel {
+#web-overlay {
   display: none;
   flex-direction: column;
-  position: absolute;
-  inset: 0;
-  z-index: 5;
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: var(--toolbar-h);
+  bottom: 0;
+  z-index: 100;
   background: var(--bg);
-  height: 100%;
-  min-height: 100%;
 }
-#web-panel.on { display: flex; }
-body.web-mode #viewer { overflow: hidden; }
-body.web-mode #toolbar .bar-row:nth-child(2) { display: none; }
-body.web-mode #bottombar { display: none !important; }
-body.web-mode #sidebar { display: none !important; }
+#web-overlay.on { display: flex; }
+html.web-active #main { display: none !important; }
+html.web-active #bottombar { display: none !important; }
+html.web-active #toolbar .bar-row:nth-child(2) { display: none !important; }
 .web-bar {
   display: flex;
   gap: 6px;
@@ -309,21 +309,27 @@ body.web-mode #sidebar { display: none !important; }
   flex-direction: column;
   overflow: hidden;
 }
-#web-frame {
+#web-visual {
   flex: 1;
-  width: 100%;
   min-height: 0;
+  width: 100%;
+  overflow: hidden;
+  background: #fff;
+  display: block;
+}
+#web-visual.hidden { display: none !important; }
+#web-visual iframe {
+  width: 100%;
   height: 100%;
   border: none;
   background: #fff;
   display: block;
 }
-#web-frame.hidden { display: none !important; }
 #web-source {
   display: none;
   flex: 1;
-  width: 100%;
   min-height: 0;
+  width: 100%;
   margin: 0;
   padding: 12px;
   overflow: auto;
@@ -337,11 +343,7 @@ body.web-mode #sidebar { display: none !important; }
   border: none;
   -webkit-overflow-scrolling: touch;
 }
-#web-source.on {
-  display: block;
-  position: absolute;
-  inset: 0;
-}
+#web-source.on { display: block; }
 
 #pages-flow {
   display: none;
@@ -600,22 +602,23 @@ input[type=file] {
       <div id="recent-list"></div>
       <p style="font-size:11px;margin-top:10px"><a href="https://github.com/metusalem969-ro/pdf-editor" target="_blank" rel="noopener" style="color:var(--blue)">📦 Cod sursă GitHub</a></p>
     </div>
-    <div id="web-panel">
-      <div class="web-bar">
-        <button type="button" class="btn" id="web-close" title="Închide">✕</button>
-        <span id="web-url-display"></span>
-        <button type="button" class="btn" id="web-refresh" title="Reîncarcă pagina">↻</button>
-      </div>
-      <div class="web-tabs">
-        <button type="button" class="web-tab active" data-tab="page">📄 Pagină</button>
-        <button type="button" class="web-tab" data-tab="code">⌨ Cod sursă</button>
-      </div>
-      <div id="web-body">
-        <iframe id="web-frame" title="Pagină web"></iframe>
-        <pre id="web-source"></pre>
-      </div>
-    </div>
     <div id="pages-flow"></div>
+  </div>
+</div>
+
+<div id="web-overlay">
+  <div class="web-bar">
+    <button type="button" class="btn" id="web-close" title="Închide">✕</button>
+    <span id="web-url-display"></span>
+    <button type="button" class="btn" id="web-refresh" title="Reîncarcă pagina">↻</button>
+  </div>
+  <div class="web-tabs">
+    <button type="button" class="web-tab active" data-tab="page">📄 Pagină</button>
+    <button type="button" class="web-tab" data-tab="code">⌨ Cod sursă</button>
+  </div>
+  <div id="web-body">
+    <div id="web-visual"></div>
+    <pre id="web-source"></pre>
   </div>
 </div>
 
@@ -708,7 +711,9 @@ let viewMode = 'none';
 let currentWebUrl = '';
 let webBlobUrl = null;
 let localHtmlSource = '';
+let storedHtmlSource = '';
 let webIsLocal = false;
+let webActiveFrame = null;
 
 const THUMB_MAX = 24;
 const thumbCache = new Map();
@@ -806,24 +811,33 @@ function cancelRender() {
   }
 }
 
-function destroyWeb() {
-  const panel = document.getElementById('web-panel');
-  const frame = document.getElementById('web-frame');
+function clearWebContent() {
+  const visual = document.getElementById('web-visual');
   const sourceEl = document.getElementById('web-source');
-  if (frame) {
-    frame.onload = null;
-    frame.src = 'about:blank';
-    frame.removeAttribute('srcdoc');
+  if (visual) {
+    visual.innerHTML = '';
+    visual.classList.remove('hidden');
   }
-  if (sourceEl) sourceEl.textContent = '';
+  if (sourceEl) {
+    sourceEl.textContent = '';
+    sourceEl.classList.remove('on');
+  }
+  webActiveFrame = null;
   if (webBlobUrl) {
     URL.revokeObjectURL(webBlobUrl);
     webBlobUrl = null;
   }
+}
+
+function destroyWeb() {
+  const overlay = document.getElementById('web-overlay');
+  clearWebContent();
   currentWebUrl = '';
   localHtmlSource = '';
+  storedHtmlSource = '';
   webIsLocal = false;
-  if (panel) panel.classList.remove('on');
+  if (overlay) overlay.classList.remove('on');
+  document.documentElement.classList.remove('web-active');
   document.body.classList.remove('web-mode');
 }
 
@@ -1051,19 +1065,28 @@ function isHtmlBuffer(buf) {
 }
 
 function setWebTab(tab) {
-  const frame = document.getElementById('web-frame');
+  const visual = document.getElementById('web-visual');
   const sourceEl = document.getElementById('web-source');
   document.querySelectorAll('.web-tab').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.tab === tab);
   });
   if (tab === 'code') {
-    frame.classList.add('hidden');
+    visual.classList.add('hidden');
     sourceEl.classList.add('on');
+    if (!sourceEl.textContent) {
+      if (storedHtmlSource) {
+        sourceEl.textContent = storedHtmlSource;
+      } else if (!webIsLocal) {
+        sourceEl.textContent = 'Codul sursă nu poate fi descărcat direct (limitare server/CORS).\n\nPagina se vede în tab-ul „Pagină”.';
+      } else {
+        sourceEl.textContent = '(Fișier gol)';
+      }
+    }
   } else {
+    visual.classList.remove('hidden');
     sourceEl.classList.remove('on');
-    frame.classList.remove('hidden');
-    if (webIsLocal && localHtmlSource) {
-      renderLocalHtmlFrame(frame, localHtmlSource);
+    if (!webActiveFrame || !webActiveFrame.parentNode) {
+      renderWebVisual({ local: webIsLocal, url: currentWebUrl, source: localHtmlSource || storedHtmlSource });
     }
   }
 }
@@ -1081,58 +1104,57 @@ function prepareLocalHtml(html) {
 }
 
 function writeHtmlToFrame(frame, html) {
-  const doc = frame.contentDocument || frame.contentWindow?.document;
-  if (!doc) return false;
-  doc.open();
-  doc.write(html);
-  doc.close();
-  return true;
-}
-
-function renderLocalHtmlFrame(frame, source) {
-  const html = prepareLocalHtml(source);
-  frame.removeAttribute('srcdoc');
-  frame.classList.remove('hidden');
-
-  const apply = () => {
-    if (writeHtmlToFrame(frame, html)) return;
-    try {
-      frame.removeAttribute('src');
-      frame.srcdoc = html;
-    } catch (_) {
-      frame.src = 'data:text/html;charset=utf-8,' + encodeURIComponent(html);
-    }
-  };
-
-  if (frame.contentDocument) {
-    apply();
-    return;
+  try {
+    const doc = frame.contentDocument || frame.contentWindow?.document;
+    if (!doc) return false;
+    doc.open();
+    doc.write(html);
+    doc.close();
+    return true;
+  } catch (_) {
+    return false;
   }
-
-  frame.onload = () => {
-    frame.onload = null;
-    apply();
-  };
-  frame.src = 'about:blank';
 }
 
-function renderWebFrame(frame, { local, url, source }) {
-  frame.removeAttribute('srcdoc');
+function renderWebVisual({ local, url, source }) {
+  const visual = document.getElementById('web-visual');
+  if (!visual) return null;
+  visual.innerHTML = '';
+  visual.classList.remove('hidden');
+
+  const frame = document.createElement('iframe');
+  frame.setAttribute('title', 'Pagină web');
+  visual.appendChild(frame);
+  webActiveFrame = frame;
+
   if (local && source) {
-    renderLocalHtmlFrame(frame, source);
-    return;
+    const html = prepareLocalHtml(source);
+    frame.srcdoc = html;
+    setTimeout(() => {
+      try {
+        const doc = frame.contentDocument;
+        const body = doc && doc.body;
+        const empty = !body || (!body.textContent.trim() && !body.querySelector('img,canvas,svg,table,iframe'));
+        if (empty) writeHtmlToFrame(frame, html);
+      } catch (_) {
+        try { frame.srcdoc = html; } catch (e2) {
+          frame.src = 'data:text/html;charset=utf-8,' + encodeURIComponent(html);
+        }
+      }
+    }, 250);
+    return frame;
   }
-  frame.onload = null;
-  frame.src = url || 'about:blank';
+
+  if (url) frame.src = url;
+  return frame;
 }
 
 async function openWebPage({ url, source, name, fetchOk = true, local = false }) {
   destroyPdf();
-  destroyWeb();
+  clearWebContent();
   setViewerMode('web');
 
-  const panel = document.getElementById('web-panel');
-  const frame = document.getElementById('web-frame');
+  const overlay = document.getElementById('web-overlay');
   const sourceEl = document.getElementById('web-source');
   const urlDisplay = document.getElementById('web-url-display');
 
@@ -1140,23 +1162,26 @@ async function openWebPage({ url, source, name, fetchOk = true, local = false })
   currentWebUrl = url;
   webIsLocal = !!local;
   localHtmlSource = local && source ? source : '';
-  panel.classList.add('on');
+  storedHtmlSource = source || '';
+  overlay.classList.add('on');
+  document.documentElement.classList.add('web-active');
   document.body.classList.add('web-mode');
 
   urlDisplay.textContent = name || url;
   urlDisplay.title = local ? (name || 'Fișier local') : url;
 
-  if (source) {
-    sourceEl.textContent = source;
-  } else if (fetchOk) {
-    sourceEl.textContent = '(Pagină goală sau fără conținut text)';
-  } else {
-    sourceEl.textContent = 'Codul sursă nu poate fi descărcat direct (limitare server/CORS).\n\nPagina se vede în tab-ul „Pagină”.';
+  if (sourceEl) {
+    sourceEl.textContent = '';
+    sourceEl.classList.remove('on');
   }
 
-  setWebTab('page');
-  requestAnimationFrame(() => renderWebFrame(frame, { local, url, source }));
-  showToast(local ? '📄 ' + (name || 'HTML local') : '🌐 ' + (name || 'Pagină web'));
+  document.querySelectorAll('.web-tab').forEach((btn, i) => btn.classList.toggle('active', i === 0));
+  renderWebVisual({ local, url, source: localHtmlSource || storedHtmlSource });
+  if (local && source && source.includes('pdfjsLib')) {
+    showToast('⚠️ Acesta e fișierul aplicației — pentru test folosește un HTML simplu');
+  } else {
+    showToast(local ? '📄 ' + (name || 'HTML local') : '🌐 ' + (name || 'Pagină web'));
+  }
 }
 
 function openUrlDialog() {
@@ -1300,6 +1325,18 @@ window.openPdfBase64 = async function(b64, name) {
   }
 };
 
+window.openHtmlBase64 = async function(b64, name) {
+  try {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const text = new TextDecoder('utf-8').decode(bytes);
+    await openWebPage({ url: name || 'pagina.html', source: text, name: name || 'pagina.html', fetchOk: true, local: true });
+  } catch (e) {
+    showToast('❌ Eroare la deschidere HTML');
+  }
+};
+
 const RECENT_KEY = 'pdf-editor-recent';
 function addRecent(item) {
   try {
@@ -1362,14 +1399,7 @@ bindTap(document.getElementById('web-close'), () => {
   showToast('Închis');
 });
 bindTap(document.getElementById('web-refresh'), () => {
-  const frame = document.getElementById('web-frame');
-  if (!frame) return;
-  if (webIsLocal && localHtmlSource) {
-    renderLocalHtmlFrame(frame, localHtmlSource);
-  } else if (currentWebUrl) {
-    frame.onload = null;
-    frame.src = currentWebUrl;
-  }
+  renderWebVisual({ local: webIsLocal, url: currentWebUrl, source: localHtmlSource || storedHtmlSource });
 });
 
 renderRecentList();
