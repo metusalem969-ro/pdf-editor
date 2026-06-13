@@ -1556,7 +1556,40 @@ function editorMime() {
   return document.getElementById('editor-format').value === 'html' ? 'text/html' : 'text/plain';
 }
 
+let nativeSaveCallback = null;
+
+window.onNativeSaveResult = function(ok, message) {
+  if (message === 'cancel') {
+    showToast('Salvare anulată');
+  } else if (ok) {
+    showToast('✅ Salvat: ' + message);
+  } else {
+    showToast('❌ ' + (message || 'Eroare la salvare'));
+  }
+  if (nativeSaveCallback) {
+    nativeSaveCallback(ok);
+    nativeSaveCallback = null;
+  }
+};
+
+function hasNativeSavePicker() {
+  return !!(window.AndroidSave && typeof window.AndroidSave.pickSave === 'function');
+}
+
 async function saveFileToDevice(content, filename, mimeType) {
+  if (hasNativeSavePicker()) {
+    return new Promise((resolve) => {
+      nativeSaveCallback = resolve;
+      try {
+        window.AndroidSave.pickSave(content, filename, mimeType || 'text/plain');
+      } catch (e) {
+        nativeSaveCallback = null;
+        console.error(e);
+        resolve(false);
+      }
+    });
+  }
+
   const blob = new Blob([content], { type: mimeType + ';charset=utf-8' });
   const file = new File([blob], filename, { type: mimeType });
 
