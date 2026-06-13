@@ -247,6 +247,87 @@ input[type=range]#size-inp::-webkit-slider-thumb {
 #dropzone h2 { font-size: 18px; color: var(--muted); font-weight: 600; }
 #dropzone p  { font-size: 13px; color: var(--muted); opacity: .7; }
 
+#web-panel {
+  display: none;
+  flex-direction: column;
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: var(--bg);
+}
+#web-panel.on { display: flex; }
+body.web-mode #viewer { overflow: hidden; }
+.web-bar {
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--s1);
+  border-bottom: 1px solid var(--border);
+  align-items: center;
+  flex-shrink: 0;
+}
+#web-url-display {
+  flex: 1;
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.web-tabs {
+  display: flex;
+  background: var(--s1);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.web-tab {
+  flex: 1;
+  padding: 10px 8px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  touch-action: manipulation;
+  border-bottom: 2px solid transparent;
+}
+.web-tab.active {
+  color: var(--blue);
+  border-bottom-color: var(--blue);
+}
+#web-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+#web-frame {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: #fff;
+  display: block;
+}
+#web-frame.hidden { display: none; }
+#web-source {
+  display: none;
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  font-family: 'Courier New', Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--s1);
+  color: var(--text);
+  border: none;
+  -webkit-overflow-scrolling: touch;
+}
+#web-source.on { display: block; }
+
 #pages-flow {
   display: none;
   width: 100%;
@@ -457,11 +538,11 @@ input[type=file] {
 <body>
 
 <div id="toolbar">
-  <input type="file" id="file-inp" accept="application/pdf,.pdf">
+  <input type="file" id="file-inp" accept="application/pdf,.pdf,text/html,.html,.htm">
   <div class="bar-row">
     <div class="bar-group bar-left">
-      <label for="file-inp" class="btn primary" id="btn-open">📂 PDF</label>
-      <button type="button" class="btn" id="btn-url" title="Deschide din web">🌐</button>
+      <label for="file-inp" class="btn primary" id="btn-open">📂 Fișier</label>
+      <button type="button" class="btn" id="btn-url" title="PDF sau pagină web">🌐</button>
       <button class="btn" id="btn-help" title="Ajutor">❓</button>
       <button class="btn" id="btn-thumbs" title="Miniaturi">🖼</button>
       <button class="btn" id="btn-prev" disabled>◀</button>
@@ -495,14 +576,29 @@ input[type=file] {
     <div id="dropzone">
       <div class="dz-ico">📄</div>
       <h2>PDF Editor METUSALEM969</h2>
-      <p style="font-size:12px;color:var(--muted)">Deschide fișiere <strong>PDF</strong> — nu pagini web HTML</p>
+      <p style="font-size:12px;color:var(--muted)">PDF, pagini web și cod HTML — local sau din link</p>
       <div class="dz-actions">
-        <label for="file-inp" class="btn primary dz-btn">📂 Alege PDF</label>
-        <button type="button" class="btn dz-btn" id="dz-url-btn">🌐 Link PDF web</button>
+        <label for="file-inp" class="btn primary dz-btn">📂 Alege fișier</label>
+        <button type="button" class="btn dz-btn" id="dz-url-btn">🌐 Link web</button>
       </div>
-      <p style="font-size:11px;opacity:.6">Scroll continuu · Pinch zoom · Offline</p>
+      <p style="font-size:11px;opacity:.6">PDF · Pagină web · Cod sursă · Offline</p>
       <div id="recent-list"></div>
       <p style="font-size:11px;margin-top:10px"><a href="https://github.com/metusalem969-ro/pdf-editor" target="_blank" rel="noopener" style="color:var(--blue)">📦 Cod sursă GitHub</a></p>
+    </div>
+    <div id="web-panel">
+      <div class="web-bar">
+        <button type="button" class="btn" id="web-close" title="Închide">✕</button>
+        <span id="web-url-display"></span>
+        <button type="button" class="btn" id="web-refresh" title="Reîncarcă pagina">↻</button>
+      </div>
+      <div class="web-tabs">
+        <button type="button" class="web-tab active" data-tab="page">📄 Pagină</button>
+        <button type="button" class="web-tab" data-tab="code">⌨ Cod sursă</button>
+      </div>
+      <div id="web-body">
+        <iframe id="web-frame" title="Pagină web"></iframe>
+        <pre id="web-source"></pre>
+      </div>
     </div>
     <div id="pages-flow"></div>
   </div>
@@ -540,9 +636,9 @@ input[type=file] {
 
 <div id="url-dialog">
   <div class="box">
-    <strong>Deschide PDF din web</strong>
-    <p style="font-size:12px;color:var(--muted);margin-top:6px">Link direct către fișier .pdf (nu pagină GitHub/HTML)</p>
-    <input type="url" id="url-inp" placeholder="https://site.ro/document.pdf" inputmode="url">
+    <strong>Deschide din web</strong>
+    <p style="font-size:12px;color:var(--muted);margin-top:6px">Link PDF (.pdf) sau pagină web (HTML) — vezi pagina și codul sursă</p>
+    <input type="url" id="url-inp" placeholder="https://site.ro sau https://site.ro/doc.pdf" inputmode="url">
     <div class="actions" style="margin-top:10px">
       <button class="btn" id="url-cancel">Anulează</button>
       <button class="btn primary" id="url-ok">Deschide</button>
@@ -554,7 +650,8 @@ input[type=file] {
   <div class="box">
     <strong>PDF Editor — Ajutor</strong>
     <ul>
-      <li>🌐 Link = URL direct .pdf (nu pagină web)</li>
+      <li>🌐 Link = PDF sau pagină web (tab Pagină + Cod sursă)</li>
+      <li>📂 Fișier local = PDF sau .html</li>
       <li>Scroll sus/jos prin toate paginile</li>
       <li>Pinch cu 2 degete = zoom</li>
       <li>Adnotări salvate automat</li>
@@ -592,6 +689,9 @@ let renderTask = null;
 let currentFileKey = null;
 let currentFileName = '';
 let notePendingPos = null;
+let viewMode = 'none';
+let currentWebUrl = '';
+let webBlobUrl = null;
 
 const THUMB_MAX = 24;
 const thumbCache = new Map();
@@ -687,6 +787,45 @@ function cancelRender() {
     try { renderTask.cancel(); } catch (_) {}
     renderTask = null;
   }
+}
+
+function destroyWeb() {
+  const panel = document.getElementById('web-panel');
+  const frame = document.getElementById('web-frame');
+  const sourceEl = document.getElementById('web-source');
+  if (frame) frame.src = 'about:blank';
+  if (sourceEl) sourceEl.textContent = '';
+  if (webBlobUrl) {
+    URL.revokeObjectURL(webBlobUrl);
+    webBlobUrl = null;
+  }
+  currentWebUrl = '';
+  if (panel) panel.classList.remove('on');
+  document.body.classList.remove('web-mode');
+}
+
+function setViewerMode(mode) {
+  viewMode = mode;
+  const dropzone = document.getElementById('dropzone');
+  const pdfOnly = ['btn-prev', 'btn-next', 'btn-thumbs', 'page-info', 'page-jump', 'btn-zoom-out', 'btn-zoom-in', 'btn-fit', 'btn-exp'];
+  const bottombar = document.getElementById('bottombar');
+  const sidebarEl = document.getElementById('sidebar');
+
+  if (mode === 'none') {
+    dropzone.style.display = 'flex';
+    pagesFlow.style.display = 'none';
+    destroyWeb();
+  } else {
+    dropzone.style.display = 'none';
+  }
+
+  pagesFlow.style.display = mode === 'pdf' ? 'block' : 'none';
+  pdfOnly.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = mode === 'pdf' ? '' : 'none';
+  });
+  if (bottombar) bottombar.style.display = mode === 'pdf' ? '' : 'none';
+  if (sidebarEl) sidebarEl.style.display = mode === 'pdf' ? '' : 'none';
 }
 
 function destroyPdf() {
@@ -882,6 +1021,58 @@ function isPdfBuffer(buf) {
   return u.length >= 5 && u[0] === 0x25 && u[1] === 0x50 && u[2] === 0x44 && u[3] === 0x46;
 }
 
+function isHtmlBuffer(buf) {
+  const u = new Uint8Array(buf.slice(0, Math.min(buf.byteLength, 512)));
+  const s = new TextDecoder('utf-8', { fatal: false }).decode(u).trimStart().toLowerCase();
+  return s.startsWith('<!doctype html') || s.startsWith('<html') || s.startsWith('<head') || s.startsWith('<body');
+}
+
+function setWebTab(tab) {
+  const frame = document.getElementById('web-frame');
+  const sourceEl = document.getElementById('web-source');
+  document.querySelectorAll('.web-tab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === tab);
+  });
+  if (tab === 'code') {
+    frame.classList.add('hidden');
+    sourceEl.classList.add('on');
+  } else {
+    frame.classList.remove('hidden');
+    sourceEl.classList.remove('on');
+  }
+}
+
+async function openWebPage({ url, source, name, fetchOk = true }) {
+  destroyPdf();
+  destroyWeb();
+  setViewerMode('web');
+
+  const panel = document.getElementById('web-panel');
+  const frame = document.getElementById('web-frame');
+  const sourceEl = document.getElementById('web-source');
+  const urlDisplay = document.getElementById('web-url-display');
+
+  currentFileName = name || url;
+  currentWebUrl = url;
+  panel.classList.add('on');
+  document.body.classList.add('web-mode');
+
+  urlDisplay.textContent = name || url;
+  urlDisplay.title = url;
+
+  if (source) {
+    sourceEl.textContent = source;
+  } else if (fetchOk) {
+    sourceEl.textContent = '(Pagină goală sau fără conținut text)';
+  } else {
+    sourceEl.textContent = 'Codul sursă nu poate fi descărcat direct (limitare server/CORS).\n\nPagina se vede în tab-ul „Pagină”.';
+  }
+
+  setWebTab('page');
+  frame.src = url;
+  showToast('🌐 ' + (name || 'Pagină web'));
+}
+
 function openUrlDialog() {
   document.getElementById('url-inp').value = '';
   document.getElementById('url-dialog').classList.add('on');
@@ -901,13 +1092,26 @@ bindTap(document.getElementById('dz-url-btn'), openUrlDialog);
 viewer.addEventListener('dragover', e => e.preventDefault());
 viewer.addEventListener('drop', e => {
   e.preventDefault();
-  const f = [...e.dataTransfer.files].find(f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+  const f = [...e.dataTransfer.files].find(f => {
+    const n = f.name.toLowerCase();
+    return f.type === 'application/pdf' || n.endsWith('.pdf') || f.type === 'text/html' || n.endsWith('.html') || n.endsWith('.htm');
+  });
   if (f) openFile(f);
 });
 
 async function openFile(file) {
   const buf = await file.arrayBuffer();
-  await loadPdfBuffer(buf, file.name);
+  const lower = file.name.toLowerCase();
+  if (isPdfBuffer(buf)) {
+    await loadPdfBuffer(buf, file.name);
+  } else if (lower.endsWith('.html') || lower.endsWith('.htm') || file.type === 'text/html' || isHtmlBuffer(buf)) {
+    const text = new TextDecoder('utf-8').decode(buf);
+    if (webBlobUrl) URL.revokeObjectURL(webBlobUrl);
+    webBlobUrl = URL.createObjectURL(new Blob([text], { type: 'text/html;charset=utf-8' }));
+    await openWebPage({ url: webBlobUrl, source: text, name: file.name, fetchOk: true });
+  } else {
+    showToast('❌ Format nesuportat — PDF sau HTML');
+  }
 }
 
 async function openFromUrl(url) {
@@ -916,36 +1120,63 @@ async function openFromUrl(url) {
   if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
   setLoading(true, 'Se descarcă…');
   try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const ct = (res.headers.get('content-type') || '').toLowerCase();
-    const buf = await res.arrayBuffer();
-    if (!isPdfBuffer(buf)) {
-      throw new Error('Nu e PDF. Folosește link direct .pdf (ex: https://site.ro/doc.pdf)');
+    let name = decodeURIComponent((url.split('/').pop() || 'pagina').split('?')[0]) || 'pagina';
+
+    let res, buf, text = '', ct = '';
+    try {
+      res = await fetch(url);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      ct = (res.headers.get('content-type') || '').toLowerCase();
+      buf = await res.arrayBuffer();
+    } catch (fetchErr) {
+      addRecent({ name, url, type: 'web' });
+      await openWebPage({ url, source: '', name, fetchOk: false });
+      showToast('🌐 Pagină deschisă (cod sursă limitat)');
+      setLoading(false);
+      return;
     }
-    if (ct.includes('text/html')) {
-      throw new Error('Linkul e pagină web, nu PDF. Copiază URL-ul fișierului .pdf');
+
+    if (isPdfBuffer(buf)) {
+      if (!name.toLowerCase().endsWith('.pdf')) name += '.pdf';
+      addRecent({ name, url, type: 'pdf' });
+      await loadPdfBuffer(buf, name);
+      showToast('✅ PDF descărcat');
+    } else if (ct.includes('text/html') || ct.includes('application/xhtml') || isHtmlBuffer(buf)) {
+      text = new TextDecoder('utf-8').decode(buf);
+      if (!name.includes('.')) name += '.html';
+      addRecent({ name, url, type: 'web' });
+      await openWebPage({ url, source: text, name, fetchOk: true });
+      showToast('✅ Pagină web + cod sursă');
+    } else {
+      text = new TextDecoder('utf-8', { fatal: false }).decode(buf);
+      addRecent({ name, url, type: 'web' });
+      await openWebPage({ url, source: text.slice(0, 500000), name, fetchOk: true });
+      showToast('🌐 Conținut web deschis');
     }
-    let name = decodeURIComponent((url.split('/').pop() || 'document.pdf').split('?')[0]);
-    if (!name.toLowerCase().endsWith('.pdf')) name += '.pdf';
-    addRecent({ name, url });
-    await loadPdfBuffer(buf, name);
-    showToast('✅ Descărcat din web');
   } catch (err) {
     console.error(err);
-    showToast('❌ ' + (err.message || 'Nu s-a putut descărca'));
+    showToast('❌ ' + (err.message || 'Nu s-a putut deschide'));
   }
   setLoading(false);
 }
 
 async function loadPdfBuffer(buf, name) {
   if (!isPdfBuffer(buf)) {
-    showToast('❌ Fișier invalid — trebuie PDF, nu HTML/cod web');
+    const text = new TextDecoder('utf-8', { fatal: false }).decode(buf);
+    if (isHtmlBuffer(buf)) {
+      if (webBlobUrl) URL.revokeObjectURL(webBlobUrl);
+      webBlobUrl = URL.createObjectURL(new Blob([text], { type: 'text/html;charset=utf-8' }));
+      await openWebPage({ url: webBlobUrl, source: text, name: name.replace(/\.pdf$/i, '.html'), fetchOk: true });
+      return;
+    }
+    showToast('❌ Fișier invalid — PDF sau HTML');
     return;
   }
   setLoading(true, 'Se încarcă ' + name + '…');
   try {
+    destroyWeb();
     destroyPdf();
+    setViewerMode('pdf');
     currentFileKey = await hashBuffer(buf);
     currentFileName = name;
     annData = {};
@@ -992,7 +1223,7 @@ function addRecent(item) {
   try {
     let list = JSON.parse(localStorage.getItem(RECENT_KEY) || '[]');
     list = list.filter(x => x.url !== item.url);
-    list.unshift({ name: item.name, url: item.url, t: Date.now() });
+    list.unshift({ name: item.name, url: item.url, type: item.type || 'web', t: Date.now() });
     list = list.slice(0, 8);
     localStorage.setItem(RECENT_KEY, JSON.stringify(list));
     renderRecentList();
@@ -1009,7 +1240,8 @@ function renderRecentList() {
     if (!item.url) return;
     const b = document.createElement('button');
     b.className = 'recent-item';
-    b.textContent = item.name || item.url;
+    const icon = item.type === 'pdf' ? '📄' : '🌐';
+    b.textContent = icon + ' ' + (item.name || item.url);
     b.title = item.url;
     b.onclick = () => openFromUrl(item.url);
     el.appendChild(b);
@@ -1033,6 +1265,23 @@ bindTap(document.getElementById('btn-help'), () => {
 });
 bindTap(document.getElementById('help-ok'), () => {
   document.getElementById('help-dialog').classList.remove('on');
+});
+
+document.querySelectorAll('.web-tab').forEach(btn => {
+  bindTap(btn, () => setWebTab(btn.dataset.tab));
+});
+bindTap(document.getElementById('web-close'), () => {
+  destroyPdf();
+  destroyWeb();
+  setViewerMode('none');
+  document.getElementById('btn-prev').disabled = true;
+  document.getElementById('btn-next').disabled = true;
+  document.getElementById('btn-exp').disabled = true;
+  showToast('Închis');
+});
+bindTap(document.getElementById('web-refresh'), () => {
+  const frame = document.getElementById('web-frame');
+  if (frame && currentWebUrl) frame.src = currentWebUrl;
 });
 
 renderRecentList();
