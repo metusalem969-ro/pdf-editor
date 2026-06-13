@@ -2,10 +2,16 @@ package com.metusalem969.pdfeditor;
 
 import android.content.Intent;
 import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
+import android.provider.DocumentsContract;
 import android.util.Base64;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 
 import com.getcapacitor.BridgeActivity;
 
@@ -17,11 +23,20 @@ import java.nio.charset.StandardCharsets;
 public class MainActivity extends BridgeActivity {
 
     private static final int MAX_FILE_BYTES = 25 * 1024 * 1024;
-    private static final int REQ_CREATE_DOCUMENT = 9101;
 
     private boolean saveBridgeAdded = false;
-    private String pendingSaveContent;
-    private String pendingSaveMime;
+    private byte[] pendingSaveBytes;
+
+    private ActivityResultLauncher<Intent> saveDocumentLauncher;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        saveDocumentLauncher = registerForActivityResult(
+            new ActivityResultContracts.StartActivityForResult(),
+            result -> handleSaveResult(result.getResultCode(), result.getData())
+        );
+        super.onCreate(savedInstanceState);
+    }
 
     @Override
     public void onStart() {
@@ -43,14 +58,6 @@ public class MainActivity extends BridgeActivity {
         handleFileIntent(getIntent());
     }
 
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == REQ_CREATE_DOCUMENT) {
-            handleSaveResult(resultCode, data);
-        }
-    }
-
     private void configureWebView() {
         if (bridge == null || bridge.getWebView() == null) return;
         WebView webView = bridge.getWebView();
@@ -66,30 +73,39 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
-    void launchSavePicker(String content, String filename, String mime) {
-        if (content == null) content = "";
+    void launchSavePicker(byte[] content, String filename, String mime) {
+        if (content == null) content = new byte[0];
         if (filename == null || filename.trim().isEmpty()) filename = "document.txt";
-        if (mime == null || mime.trim().isEmpty()) mime = "text/plain";
+        if (mime == null || mime.trim().isEmpty()) mime = "application/octet-stream";
 
-        pendingSaveContent = content;
-        pendingSaveMime = mime;
+        pendingSaveBytes = content;
 
         Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType(mime);
         intent.putExtra(Intent.EXTRA_TITLE, filename);
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                intent.putExtra(
+                    DocumentsContract.EXTRA_INITIAL_DIR,
+                    Uri.parse("content://com.android.externalstorage.documents/document/primary:Download")
+                );
+            } catch (Exception ignored) {
+            }
+        }
+
         try {
-            startActivityForResult(intent, REQ_CREATE_DOCUMENT);
+            saveDocumentLauncher.launch(intent);
         } catch (Exception e) {
-            pendingSaveContent = null;
+            pendingSaveBytes = null;
             notifySaveResult(false, "Nu s-a putut deschide dialogul de salvare");
         }
     }
 
     private void handleSaveResult(int resultCode, Intent data) {
-        String content = pendingSaveContent;
-        pendingSaveContent = null;
+        byte[] content = pendingSaveBytes;
+        pendingSaveBytes = null;
 
         if (resultCode != RESULT_OK || data == null || data.getData() == null) {
             notifySaveResult(false, "cancel");
@@ -99,8 +115,7 @@ public class MainActivity extends BridgeActivity {
         Uri uri = data.getData();
         try (OutputStream out = getContentResolver().openOutputStream(uri)) {
             if (out == null) throw new Exception("Nu s-a putut scrie fișierul");
-            byte[] bytes = content != null ? content.getBytes(StandardCharsets.UTF_8) : new byte[0];
-            out.write(bytes);
+            out.write(content != null ? content : new byte[0]);
             out.flush();
             String name = uri.getLastPathSegment();
             if (name == null) name = "fișier";
@@ -180,7 +195,20 @@ public class MainActivity extends BridgeActivity {
 
         @JavascriptInterface
         public void pickSave(String content, String filename, String mime) {
-            activity.runOnUiThread(() -> activity.launchSavePicker(content, filename, mime));
+            byte[] bytes = content != null ? content.getBytes(StandardCharsets.UTF_8) : new byte[0];
+            activity.runOnUiThread(() -> activity.launchSavePicker(bytes, filename, mime));
+        }
+
+        @JavascriptInterface
+        public void pickSaveBase64(String base64, String filename, String mime) {
+            byte[] bytes;
+            try {
+                bytes = Base64.decode(base64 != null ? base64 : "", Base64.DEFAULT);
+            } catch (Exception e) {
+                activity.runOnUiThread(() -> activity.notifySaveResult(false, "Date invalide"));
+                return;
+            }
+            activity.runOnUiThread(() -> activity.launchSavePicker(bytes, filename, mime));
         }
     }
 }
