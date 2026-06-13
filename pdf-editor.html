@@ -1093,12 +1093,13 @@ function setWebTab(tab) {
 
 function prepareLocalHtml(html) {
   const inject = '<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">';
+  const closeHead = '<' + '/head>';
   if (/<meta[^>]+name=["']viewport/i.test(html)) return html;
   if (/<head[^>]*>/i.test(html)) {
     return html.replace(/<head([^>]*)>/i, (m, attrs) => '<head' + attrs + '>' + inject);
   }
   if (/<html[^>]*>/i.test(html)) {
-    return html.replace(/<html([^>]*)>/i, (m, attrs) => '<html' + attrs + '><head>' + inject + '</head>');
+    return html.replace(/<html([^>]*)>/i, (m, attrs) => '<html' + attrs + '><head>' + inject + closeHead);
   }
   return inject + html;
 }
@@ -2175,6 +2176,8 @@ document.addEventListener('keydown', e => {
 });
 
 // ── Init ────────────────────────────────────────────────────────────────────
+destroyWeb();
+setViewerMode('none');
 setTool('scroll');
 updateNav();
 </script>
