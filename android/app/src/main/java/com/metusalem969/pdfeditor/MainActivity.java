@@ -2,9 +2,7 @@ package com.metusalem969.pdfeditor;
 
 import android.content.Intent;
 import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
-import android.provider.DocumentsContract;
 import android.util.Base64;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
@@ -84,16 +82,6 @@ public class MainActivity extends BridgeActivity {
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType(mime);
         intent.putExtra(Intent.EXTRA_TITLE, filename);
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            try {
-                intent.putExtra(
-                    DocumentsContract.EXTRA_INITIAL_DIR,
-                    Uri.parse("content://com.android.externalstorage.documents/document/primary:Download")
-                );
-            } catch (Exception ignored) {
-            }
-        }
 
         try {
             saveDocumentLauncher.launch(intent);
