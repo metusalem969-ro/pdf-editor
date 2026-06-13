@@ -1463,8 +1463,14 @@ async function exportPDF() {
     }
 
     const outName = currentFileName.replace(/\.pdf$/i, '') + '-adnotat.pdf';
-    pdf.save(outName);
-    showToast('✅ PDF exportat!');
+    if (hasNativeSavePicker() && window.AndroidSave.pickSaveBase64) {
+      const b64 = arrayBufferToBase64(pdf.output('arraybuffer'));
+      const ok = await nativeSavePicker(b64, outName, 'application/pdf', true);
+      if (ok) showToast('✅ PDF salvat');
+    } else {
+      pdf.save(outName);
+      showToast('✅ PDF exportat!');
+    }
   } catch (err) {
     console.error(err);
     showToast('❌ ' + (err.message || 'Eroare export'));
@@ -1576,18 +1582,36 @@ function hasNativeSavePicker() {
   return !!(window.AndroidSave && typeof window.AndroidSave.pickSave === 'function');
 }
 
-async function saveFileToDevice(content, filename, mimeType) {
-  if (hasNativeSavePicker()) {
-    return new Promise((resolve) => {
-      nativeSaveCallback = resolve;
-      try {
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+function nativeSavePicker(content, filename, mimeType, isBinary) {
+  return new Promise((resolve) => {
+    nativeSaveCallback = resolve;
+    try {
+      if (isBinary && window.AndroidSave.pickSaveBase64) {
+        window.AndroidSave.pickSaveBase64(content, filename, mimeType || 'application/octet-stream');
+      } else {
         window.AndroidSave.pickSave(content, filename, mimeType || 'text/plain');
-      } catch (e) {
-        nativeSaveCallback = null;
-        console.error(e);
-        resolve(false);
       }
-    });
+    } catch (e) {
+      nativeSaveCallback = null;
+      console.error(e);
+      resolve(false);
+    }
+  });
+}
+
+async function saveFileToDevice(content, filename, mimeType, isBinary) {
+  if (hasNativeSavePicker()) {
+    return nativeSavePicker(content, filename, mimeType, isBinary);
   }
 
   const blob = new Blob([content], { type: mimeType + ';charset=utf-8' });
