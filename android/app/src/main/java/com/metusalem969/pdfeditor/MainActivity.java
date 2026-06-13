@@ -71,15 +71,12 @@ public class MainActivity extends BridgeActivity {
             if (data.length == 0 || data.length > MAX_FILE_BYTES) return;
 
             String b64 = Base64.encodeToString(data, Base64.NO_WRAP);
-            String name = "document";
-            String path = uri.getLastPathSegment();
-            if (path != null) name = path;
 
             final String js;
-            if (isHtml && !isPdf) {
+            if (isHtml) {
                 js = "window.openHtmlBase64 && window.openHtmlBase64('" + b64 + "','" + escapeJs(name) + "')";
             } else {
-                if (!name.toLowerCase().endsWith(".pdf")) name += ".pdf";
+                if (!lower.endsWith(".pdf")) name += ".pdf";
                 js = "window.openPdfBase64 && window.openPdfBase64('" + b64 + "','" + escapeJs(name) + "')";
             }
 
