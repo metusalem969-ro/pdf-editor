@@ -218,6 +218,30 @@ input[type=range]#size-inp::-webkit-slider-thumb {
   justify-content: center;
   gap: 10px;
   pointer-events: none;
+  z-index: 2;
+  padding: 16px;
+}
+#dropzone a,
+#dropzone .dz-btn,
+#dropzone .dz-actions,
+#recent-list,
+#recent-list * {
+  pointer-events: auto;
+}
+.dz-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.dz-btn {
+  min-height: 48px;
+  min-width: 130px;
+  font-size: 14px;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
 }
 #dropzone .dz-ico { font-size: 64px; opacity: .25; }
 #dropzone h2 { font-size: 18px; color: var(--muted); font-weight: 600; }
@@ -413,7 +437,14 @@ input[type=range]#size-inp::-webkit-slider-thumb {
 #help-dialog ul { margin: 10px 0 10px 18px; font-size: 13px; line-height: 1.6; color: var(--muted); }
 #help-dialog a { color: var(--blue); }
 
-input[type=file] { display: none; }
+input[type=file] {
+  position: fixed;
+  left: -9999px;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+}
 
 @media (max-width: 520px) {
   .btn { padding: 5px 7px; font-size: 11px; }
@@ -429,8 +460,8 @@ input[type=file] { display: none; }
   <input type="file" id="file-inp" accept="application/pdf,.pdf">
   <div class="bar-row">
     <div class="bar-group bar-left">
-      <button class="btn primary" id="btn-open">📂 PDF</button>
-      <button class="btn" id="btn-url" title="Deschide din web">🌐</button>
+      <label for="file-inp" class="btn primary" id="btn-open">📂 PDF</label>
+      <button type="button" class="btn" id="btn-url" title="Deschide din web">🌐</button>
       <button class="btn" id="btn-help" title="Ajutor">❓</button>
       <button class="btn" id="btn-thumbs" title="Miniaturi">🖼</button>
       <button class="btn" id="btn-prev" disabled>◀</button>
@@ -464,8 +495,12 @@ input[type=file] { display: none; }
     <div id="dropzone">
       <div class="dz-ico">📄</div>
       <h2>PDF Editor METUSALEM969</h2>
-      <p>Apasă 📂 PDF, 🌐 link web sau trage fișier aici</p>
-      <p style="font-size:11px;opacity:.6">Offline · Scroll continuu · Pinch zoom</p>
+      <p style="font-size:12px;color:var(--muted)">Deschide fișiere <strong>PDF</strong> — nu pagini web HTML</p>
+      <div class="dz-actions">
+        <label for="file-inp" class="btn primary dz-btn">📂 Alege PDF</label>
+        <button type="button" class="btn dz-btn" id="dz-url-btn">🌐 Link PDF web</button>
+      </div>
+      <p style="font-size:11px;opacity:.6">Scroll continuu · Pinch zoom · Offline</p>
       <div id="recent-list"></div>
       <p style="font-size:11px;margin-top:10px"><a href="https://github.com/metusalem969-ro/pdf-editor" target="_blank" rel="noopener" style="color:var(--blue)">📦 Cod sursă GitHub</a></p>
     </div>
@@ -506,7 +541,8 @@ input[type=file] { display: none; }
 <div id="url-dialog">
   <div class="box">
     <strong>Deschide PDF din web</strong>
-    <input type="url" id="url-inp" placeholder="https://exemplu.ro/document.pdf">
+    <p style="font-size:12px;color:var(--muted);margin-top:6px">Link direct către fișier .pdf (nu pagină GitHub/HTML)</p>
+    <input type="url" id="url-inp" placeholder="https://site.ro/document.pdf" inputmode="url">
     <div class="actions" style="margin-top:10px">
       <button class="btn" id="url-cancel">Anulează</button>
       <button class="btn primary" id="url-ok">Deschide</button>
@@ -518,7 +554,7 @@ input[type=file] { display: none; }
   <div class="box">
     <strong>PDF Editor — Ajutor</strong>
     <ul>
-      <li>📂 PDF local · 🌐 link web</li>
+      <li>🌐 Link = URL direct .pdf (nu pagină web)</li>
       <li>Scroll sus/jos prin toate paginile</li>
       <li>Pinch cu 2 degete = zoom</li>
       <li>Adnotări salvate automat</li>
@@ -840,7 +876,27 @@ document.getElementById('file-inp').addEventListener('change', e => {
   if (f) openFile(f);
   e.target.value = '';
 });
-document.getElementById('btn-open').addEventListener('click', () => document.getElementById('file-inp').click());
+
+function isPdfBuffer(buf) {
+  const u = new Uint8Array(buf);
+  return u.length >= 5 && u[0] === 0x25 && u[1] === 0x50 && u[2] === 0x44 && u[3] === 0x46;
+}
+
+function openUrlDialog() {
+  document.getElementById('url-inp').value = '';
+  document.getElementById('url-dialog').classList.add('on');
+  setTimeout(() => document.getElementById('url-inp').focus(), 100);
+}
+
+function bindTap(el, fn) {
+  if (!el) return;
+  const run = e => { e.preventDefault(); e.stopPropagation(); fn(e); };
+  el.addEventListener('click', run);
+  el.addEventListener('touchend', run, { passive: false });
+}
+
+bindTap(document.getElementById('btn-url'), openUrlDialog);
+bindTap(document.getElementById('dz-url-btn'), openUrlDialog);
 
 viewer.addEventListener('dragover', e => e.preventDefault());
 viewer.addEventListener('drop', e => {
@@ -862,7 +918,14 @@ async function openFromUrl(url) {
   try {
     const res = await fetch(url);
     if (!res.ok) throw new Error('HTTP ' + res.status);
+    const ct = (res.headers.get('content-type') || '').toLowerCase();
     const buf = await res.arrayBuffer();
+    if (!isPdfBuffer(buf)) {
+      throw new Error('Nu e PDF. Folosește link direct .pdf (ex: https://site.ro/doc.pdf)');
+    }
+    if (ct.includes('text/html')) {
+      throw new Error('Linkul e pagină web, nu PDF. Copiază URL-ul fișierului .pdf');
+    }
     let name = decodeURIComponent((url.split('/').pop() || 'document.pdf').split('?')[0]);
     if (!name.toLowerCase().endsWith('.pdf')) name += '.pdf';
     addRecent({ name, url });
@@ -876,6 +939,10 @@ async function openFromUrl(url) {
 }
 
 async function loadPdfBuffer(buf, name) {
+  if (!isPdfBuffer(buf)) {
+    showToast('❌ Fișier invalid — trebuie PDF, nu HTML/cod web');
+    return;
+  }
   setLoading(true, 'Se încarcă ' + name + '…');
   try {
     destroyPdf();
@@ -949,15 +1016,10 @@ function renderRecentList() {
   });
 }
 
-document.getElementById('btn-url').addEventListener('click', () => {
-  document.getElementById('url-inp').value = '';
-  document.getElementById('url-dialog').classList.add('on');
-  document.getElementById('url-inp').focus();
-});
 document.getElementById('url-cancel').addEventListener('click', () => {
   document.getElementById('url-dialog').classList.remove('on');
 });
-document.getElementById('url-ok').addEventListener('click', () => {
+bindTap(document.getElementById('url-ok'), () => {
   const url = document.getElementById('url-inp').value;
   document.getElementById('url-dialog').classList.remove('on');
   openFromUrl(url);
@@ -966,10 +1028,10 @@ document.getElementById('url-inp').addEventListener('keydown', e => {
   if (e.key === 'Enter') document.getElementById('url-ok').click();
 });
 
-document.getElementById('btn-help').addEventListener('click', () => {
+bindTap(document.getElementById('btn-help'), () => {
   document.getElementById('help-dialog').classList.add('on');
 });
-document.getElementById('help-ok').addEventListener('click', () => {
+bindTap(document.getElementById('help-ok'), () => {
   document.getElementById('help-dialog').classList.remove('on');
 });
 
