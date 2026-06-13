@@ -692,6 +692,8 @@ let notePendingPos = null;
 let viewMode = 'none';
 let currentWebUrl = '';
 let webBlobUrl = null;
+let localHtmlSource = '';
+let webIsLocal = false;
 
 const THUMB_MAX = 24;
 const thumbCache = new Map();
@@ -793,13 +795,18 @@ function destroyWeb() {
   const panel = document.getElementById('web-panel');
   const frame = document.getElementById('web-frame');
   const sourceEl = document.getElementById('web-source');
-  if (frame) frame.src = 'about:blank';
+  if (frame) {
+    frame.src = 'about:blank';
+    frame.removeAttribute('srcdoc');
+  }
   if (sourceEl) sourceEl.textContent = '';
   if (webBlobUrl) {
     URL.revokeObjectURL(webBlobUrl);
     webBlobUrl = null;
   }
   currentWebUrl = '';
+  localHtmlSource = '';
+  webIsLocal = false;
   if (panel) panel.classList.remove('on');
   document.body.classList.remove('web-mode');
 }
@@ -1042,7 +1049,25 @@ function setWebTab(tab) {
   }
 }
 
-async function openWebPage({ url, source, name, fetchOk = true }) {
+function prepareLocalHtml(html) {
+  const inject = '<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">';
+  if (/<meta[^>]+name=["']viewport/i.test(html)) return html;
+  if (/<head[^>]*>/i.test(html)) return html.replace(/<head([^>]*)>/i, `<head$1>${inject}`);
+  if (/<html[^>]*>/i.test(html)) return html.replace(/<html([^>]*)>/i, `<html$1><head>${inject}</head>`);
+  return inject + html;
+}
+
+function renderWebFrame(frame, { local, url, source }) {
+  frame.src = 'about:blank';
+  frame.removeAttribute('srcdoc');
+  if (local && source) {
+    frame.srcdoc = prepareLocalHtml(source);
+    return;
+  }
+  if (url) frame.src = url;
+}
+
+async function openWebPage({ url, source, name, fetchOk = true, local = false }) {
   destroyPdf();
   destroyWeb();
   setViewerMode('web');
@@ -1054,11 +1079,13 @@ async function openWebPage({ url, source, name, fetchOk = true }) {
 
   currentFileName = name || url;
   currentWebUrl = url;
+  webIsLocal = !!local;
+  localHtmlSource = local && source ? source : '';
   panel.classList.add('on');
   document.body.classList.add('web-mode');
 
   urlDisplay.textContent = name || url;
-  urlDisplay.title = url;
+  urlDisplay.title = local ? (name || 'Fișier local') : url;
 
   if (source) {
     sourceEl.textContent = source;
@@ -1069,8 +1096,8 @@ async function openWebPage({ url, source, name, fetchOk = true }) {
   }
 
   setWebTab('page');
-  frame.src = url;
-  showToast('🌐 ' + (name || 'Pagină web'));
+  renderWebFrame(frame, { local, url, source });
+  showToast(local ? '📄 ' + (name || 'HTML local') : '🌐 ' + (name || 'Pagină web'));
 }
 
 function openUrlDialog() {
@@ -1106,9 +1133,7 @@ async function openFile(file) {
     await loadPdfBuffer(buf, file.name);
   } else if (lower.endsWith('.html') || lower.endsWith('.htm') || file.type === 'text/html' || isHtmlBuffer(buf)) {
     const text = new TextDecoder('utf-8').decode(buf);
-    if (webBlobUrl) URL.revokeObjectURL(webBlobUrl);
-    webBlobUrl = URL.createObjectURL(new Blob([text], { type: 'text/html;charset=utf-8' }));
-    await openWebPage({ url: webBlobUrl, source: text, name: file.name, fetchOk: true });
+    await openWebPage({ url: file.name, source: text, name: file.name, fetchOk: true, local: true });
   } else {
     showToast('❌ Format nesuportat — PDF sau HTML');
   }
@@ -1164,9 +1189,7 @@ async function loadPdfBuffer(buf, name) {
   if (!isPdfBuffer(buf)) {
     const text = new TextDecoder('utf-8', { fatal: false }).decode(buf);
     if (isHtmlBuffer(buf)) {
-      if (webBlobUrl) URL.revokeObjectURL(webBlobUrl);
-      webBlobUrl = URL.createObjectURL(new Blob([text], { type: 'text/html;charset=utf-8' }));
-      await openWebPage({ url: webBlobUrl, source: text, name: name.replace(/\.pdf$/i, '.html'), fetchOk: true });
+      await openWebPage({ url: name.replace(/\.pdf$/i, '.html'), source: text, name: name.replace(/\.pdf$/i, '.html'), fetchOk: true, local: true });
       return;
     }
     showToast('❌ Fișier invalid — PDF sau HTML');
@@ -1281,7 +1304,12 @@ bindTap(document.getElementById('web-close'), () => {
 });
 bindTap(document.getElementById('web-refresh'), () => {
   const frame = document.getElementById('web-frame');
-  if (frame && currentWebUrl) frame.src = currentWebUrl;
+  if (!frame) return;
+  if (webIsLocal && localHtmlSource) {
+    renderWebFrame(frame, { local: true, source: localHtmlSource });
+  } else if (currentWebUrl) {
+    renderWebFrame(frame, { local: false, url: currentWebUrl });
+  }
 });
 
 renderRecentList();
