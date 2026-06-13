@@ -519,7 +519,7 @@ viewer.addEventListener('drop', e => {
   e.preventDefault();
   const f = [...e.dataTransfer.files].find(f => {
     const n = f.name.toLowerCase();
-    return f.type === 'application/pdf' || n.endsWith('.pdf') || f.type === 'text/html' || n.endsWith('.html') || n.endsWith('.htm');
+    return f.type === 'application/pdf' || n.endsWith('.pdf') || f.type === 'text/html' || n.endsWith('.html') || n.endsWith('.htm') || f.type === 'text/plain' || n.endsWith('.txt');
   });
   if (f) openFile(f);
 });
@@ -529,11 +529,14 @@ async function openFile(file) {
   const lower = file.name.toLowerCase();
   if (isPdfBuffer(buf)) {
     await loadPdfBuffer(buf, file.name);
+  } else if (lower.endsWith('.txt') || file.type === 'text/plain') {
+    const text = new TextDecoder('utf-8').decode(buf);
+    openEditor({ content: text, name: file.name, format: 'txt' });
   } else if (lower.endsWith('.html') || lower.endsWith('.htm') || file.type === 'text/html' || isHtmlBuffer(buf)) {
     const text = new TextDecoder('utf-8').decode(buf);
     await openWebPage({ url: file.name, source: text, name: file.name, fetchOk: true, local: true });
   } else {
-    showToast('❌ Format nesuportat — PDF sau HTML');
+    showToast('❌ Format nesuportat — PDF, TXT sau HTML');
   }
 }
 
@@ -1488,8 +1491,166 @@ document.addEventListener('keydown', e => {
   if (tools[k]) setTool(tools[k]);
 });
 
+// ── Editor fișiere noi (TXT / HTML) ─────────────────────────────────────────
+const HTML_TEMPLATE = [
+  '<!DOCTYPE html>',
+  '<html lang="ro">',
+  '<head>',
+  '<meta charset="utf-8">',
+  '<meta name="viewport" content="width=device-width,initial-scale=1">',
+  '<title>Document nou</title>',
+  '</head>',
+  '<body>',
+  '',
+  '<p>Scrie aici...</p>',
+  '',
+  '</body>',
+  '</html>'
+].join('\n');
+
+let editorFormat = 'txt';
+
+function closeEditor() {
+  const overlay = document.getElementById('editor-overlay');
+  if (overlay) overlay.classList.remove('on');
+  document.documentElement.classList.remove('editor-active');
+}
+
+function openNewDialog() {
+  document.getElementById('new-dialog').classList.add('on');
+}
+
+function openEditor({ content = '', name = '', format = 'txt' } = {}) {
+  destroyPdf();
+  destroyWeb();
+  setViewerMode('none');
+  editorFormat = format === 'html' ? 'html' : 'txt';
+  const overlay = document.getElementById('editor-overlay');
+  const ta = document.getElementById('editor-content');
+  const fn = document.getElementById('editor-filename');
+  const sel = document.getElementById('editor-format');
+  const defaultName = editorFormat === 'html' ? 'document.html' : 'notite.txt';
+  fn.value = name || defaultName;
+  sel.value = editorFormat;
+  ta.value = content || (editorFormat === 'html' ? HTML_TEMPLATE : '');
+  overlay.classList.add('on');
+  document.documentElement.classList.add('editor-active');
+  setTimeout(() => ta.focus(), 150);
+  showToast('📝 Editor — scrie și apasă Salvează');
+}
+
+function editorFilename() {
+  let name = (document.getElementById('editor-filename').value || '').trim();
+  const fmt = document.getElementById('editor-format').value;
+  if (!name) name = fmt === 'html' ? 'document.html' : 'notite.txt';
+  if (fmt === 'html' && !name.toLowerCase().endsWith('.html') && !name.toLowerCase().endsWith('.htm')) {
+    name += '.html';
+  }
+  if (fmt === 'txt' && !name.toLowerCase().endsWith('.txt')) {
+    name += '.txt';
+  }
+  return name;
+}
+
+function editorMime() {
+  return document.getElementById('editor-format').value === 'html' ? 'text/html' : 'text/plain';
+}
+
+async function saveFileToDevice(content, filename, mimeType) {
+  const blob = new Blob([content], { type: mimeType + ';charset=utf-8' });
+  const file = new File([blob], filename, { type: mimeType });
+
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: filename });
+      showToast('✅ Alege unde salvezi (Fișiere, Drive…)');
+      return true;
+    } catch (e) {
+      if (e.name === 'AbortError') return false;
+    }
+  }
+
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: filename, text: content });
+      showToast('✅ Partajat — salvează din app-ul ales');
+      return true;
+    } catch (e) {
+      if (e.name === 'AbortError') return false;
+    }
+  }
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  showToast('✅ ' + filename);
+  return true;
+}
+
+async function saveEditorFile() {
+  const content = document.getElementById('editor-content').value;
+  const filename = editorFilename();
+  const mime = editorMime();
+  await saveFileToDevice(content, filename, mime);
+}
+
+function previewEditorContent() {
+  const content = document.getElementById('editor-content').value;
+  const name = editorFilename();
+  const fmt = document.getElementById('editor-format').value;
+  closeEditor();
+  if (fmt === 'html') {
+    openWebPage({ url: name, source: content, name, fetchOk: true, local: true });
+  } else {
+    openWebPage({
+      url: name,
+      source: '<pre style="font-family:monospace;white-space:pre-wrap;padding:16px">' + content.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</pre>',
+      name,
+      fetchOk: true,
+      local: true
+    });
+  }
+}
+
+bindTap(document.getElementById('btn-new'), openNewDialog);
+bindTap(document.getElementById('dz-new-btn'), openNewDialog);
+bindTap(document.getElementById('new-cancel'), () => {
+  document.getElementById('new-dialog').classList.remove('on');
+});
+bindTap(document.getElementById('new-txt'), () => {
+  document.getElementById('new-dialog').classList.remove('on');
+  openEditor({ format: 'txt' });
+});
+bindTap(document.getElementById('new-html'), () => {
+  document.getElementById('new-dialog').classList.remove('on');
+  openEditor({ format: 'html', content: HTML_TEMPLATE });
+});
+bindTap(document.getElementById('editor-close'), () => {
+  closeEditor();
+  setViewerMode('none');
+});
+bindTap(document.getElementById('editor-save'), saveEditorFile);
+bindTap(document.getElementById('editor-preview'), previewEditorContent);
+document.getElementById('editor-format').addEventListener('change', e => {
+  const fmt = e.target.value;
+  const fn = document.getElementById('editor-filename');
+  if (fmt === 'html' && !fn.value.toLowerCase().includes('.html')) {
+    fn.value = fn.value.replace(/\.txt$/i, '') || 'document';
+    if (!fn.value.endsWith('.html')) fn.value += '.html';
+  }
+  if (fmt === 'txt' && fn.value.toLowerCase().endsWith('.html')) {
+    fn.value = fn.value.replace(/\.html?$/i, '') + '.txt';
+  }
+});
+
 // ── Init ────────────────────────────────────────────────────────────────────
 destroyWeb();
+closeEditor();
 setViewerMode('none');
 setTool('scroll');
 updateNav();

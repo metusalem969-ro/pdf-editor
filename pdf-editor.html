@@ -262,6 +262,65 @@ input[type=range]#size-inp::-webkit-slider-thumb {
 html.web-active #main { display: none !important; }
 html.web-active #bottombar { display: none !important; }
 html.web-active #toolbar .bar-row:nth-child(2) { display: none !important; }
+html.editor-active #main { display: none !important; }
+html.editor-active #bottombar { display: none !important; }
+html.editor-active #toolbar .bar-row:nth-child(2) { display: none !important; }
+
+#editor-overlay {
+  display: none;
+  flex-direction: column;
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: var(--toolbar-h);
+  bottom: 0;
+  z-index: 100;
+  background: var(--bg);
+}
+#editor-overlay.on { display: flex; }
+.editor-bar {
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--s1);
+  border-bottom: 1px solid var(--border);
+  align-items: center;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+#editor-filename {
+  flex: 1;
+  min-width: 100px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--s2);
+  color: var(--text);
+  font-size: 12px;
+}
+#editor-format {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--s2);
+  color: var(--text);
+  font-size: 12px;
+}
+#editor-content {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: none;
+  padding: 12px;
+  resize: none;
+  font-family: 'Courier New', Consolas, monospace;
+  font-size: 14px;
+  line-height: 1.5;
+  background: var(--s1);
+  color: var(--text);
+  -webkit-overflow-scrolling: touch;
+}
+#editor-content:focus { outline: none; }
 .web-bar {
   display: flex;
   gap: 6px;
@@ -484,7 +543,7 @@ html.web-active #toolbar .bar-row:nth-child(2) { display: none !important; }
 }
 #note-dialog .actions { display: flex; gap: 8px; margin-top: 10px; justify-content: flex-end; }
 
-#url-dialog, #help-dialog {
+#url-dialog, #help-dialog, #new-dialog {
   display: none;
   position: fixed;
   inset: 0;
@@ -494,8 +553,8 @@ html.web-active #toolbar .bar-row:nth-child(2) { display: none !important; }
   justify-content: center;
   padding: 16px;
 }
-#url-dialog.on, #help-dialog.on { display: flex; }
-#url-dialog .box, #help-dialog .box {
+#url-dialog.on, #help-dialog.on, #new-dialog.on { display: flex; }
+#url-dialog .box, #help-dialog .box, #new-dialog .box {
   background: var(--s1);
   color: var(--text);
   border: 1px solid var(--border);
@@ -555,10 +614,11 @@ input[type=file] {
 <body>
 
 <div id="toolbar">
-  <input type="file" id="file-inp" accept="application/pdf,.pdf,text/html,.html,.htm">
+  <input type="file" id="file-inp" accept="application/pdf,.pdf,text/html,.html,.htm,.txt,text/plain">
   <div class="bar-row">
     <div class="bar-group bar-left">
       <label for="file-inp" class="btn primary" id="btn-open">📂 Fișier</label>
+      <button type="button" class="btn" id="btn-new" title="Fișier nou">📝 Nou</button>
       <button type="button" class="btn" id="btn-url" title="PDF sau pagină web">🌐</button>
       <button class="btn" id="btn-help" title="Ajutor">❓</button>
       <button class="btn" id="btn-thumbs" title="Miniaturi">🖼</button>
@@ -597,13 +657,28 @@ input[type=file] {
       <div class="dz-actions">
         <label for="file-inp" class="btn primary dz-btn">📂 Alege fișier</label>
         <button type="button" class="btn dz-btn" id="dz-url-btn">🌐 Link web</button>
+        <button type="button" class="btn dz-btn" id="dz-new-btn">📝 Fișier nou</button>
       </div>
-      <p style="font-size:11px;opacity:.6">PDF · Pagină web · Cod sursă · Offline</p>
+      <p style="font-size:11px;opacity:.6">PDF · TXT · HTML · Pagină web</p>
       <div id="recent-list"></div>
       <p style="font-size:11px;margin-top:10px"><a href="https://github.com/metusalem969-ro/pdf-editor" target="_blank" rel="noopener" style="color:var(--blue)">📦 Cod sursă GitHub</a></p>
     </div>
     <div id="pages-flow"></div>
   </div>
+</div>
+
+<div id="editor-overlay">
+  <div class="editor-bar">
+    <button type="button" class="btn" id="editor-close" title="Închide">✕</button>
+    <input type="text" id="editor-filename" placeholder="nume_fisier.txt" autocomplete="off">
+    <select id="editor-format">
+      <option value="txt">TXT</option>
+      <option value="html">HTML</option>
+    </select>
+    <button type="button" class="btn primary" id="editor-save">💾 Salvează</button>
+    <button type="button" class="btn" id="editor-preview" title="Vezi ca pagină">👁</button>
+  </div>
+  <textarea id="editor-content" placeholder="Scrie aici…" spellcheck="false"></textarea>
 </div>
 
 <div id="web-overlay">
@@ -664,12 +739,27 @@ input[type=file] {
   </div>
 </div>
 
+<div id="new-dialog">
+  <div class="box">
+    <strong>Fișier nou</strong>
+    <p style="font-size:12px;color:var(--muted);margin-top:6px">Alege formatul, scrie, apoi Salvează pe telefon</p>
+    <div class="actions" style="margin-top:12px;justify-content:stretch">
+      <button type="button" class="btn primary" id="new-txt" style="flex:1">📄 Text (.txt)</button>
+      <button type="button" class="btn primary" id="new-html" style="flex:1">🌐 HTML (.html)</button>
+    </div>
+    <div class="actions" style="margin-top:8px">
+      <button type="button" class="btn" id="new-cancel">Anulează</button>
+    </div>
+  </div>
+</div>
+
 <div id="help-dialog">
   <div class="box">
     <strong>PDF Editor — Ajutor</strong>
     <ul>
+      <li>📝 Nou = creează TXT sau HTML și salvează pe telefon</li>
       <li>🌐 Link = PDF sau pagină web (tab Pagină + Cod sursă)</li>
-      <li>📂 Fișier local = PDF sau .html</li>
+      <li>📂 Fișier local = PDF, .txt sau .html</li>
       <li>Scroll sus/jos prin toate paginile</li>
       <li>Pinch cu 2 degete = zoom</li>
       <li>Adnotări salvate automat</li>
