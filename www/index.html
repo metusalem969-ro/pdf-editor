@@ -811,6 +811,7 @@ function destroyWeb() {
   const frame = document.getElementById('web-frame');
   const sourceEl = document.getElementById('web-source');
   if (frame) {
+    frame.onload = null;
     frame.src = 'about:blank';
     frame.removeAttribute('srcdoc');
   }
