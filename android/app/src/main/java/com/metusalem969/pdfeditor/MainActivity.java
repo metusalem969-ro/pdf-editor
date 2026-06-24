@@ -1,11 +1,14 @@
 package com.metusalem969.pdfeditor;
 
+import android.content.ClipData;
 import android.content.Intent;
+import android.content.res.AssetFileDescriptor;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.ParcelFileDescriptor;
 import android.provider.OpenableColumns;
 import android.util.Base64;
 import android.webkit.JavascriptInterface;
@@ -19,6 +22,8 @@ import androidx.core.content.IntentCompat;
 import com.getcapacitor.BridgeActivity;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
@@ -28,12 +33,13 @@ public class MainActivity extends BridgeActivity {
 
     private static final int MAX_FILE_BYTES = 25 * 1024 * 1024;
     private static final int MAX_DELIVER_RETRIES = 120;
-    private static final int BASE64_CHUNK = 256 * 1024;
 
     private byte[] pendingSaveBytes;
     private PendingIncomingFile pendingIncoming;
     private int deliverRetries = 0;
     private WebView bridgedWebView = null;
+    private boolean readAttempted = false;
+    private String pendingToast = null;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
@@ -57,6 +63,8 @@ public class MainActivity extends BridgeActivity {
             new ActivityResultContracts.StartActivityForResult(),
             result -> handleSaveResult(result.getResultCode(), result.getData())
         );
+        Intent launchIntent = getIntent();
+        readIncomingIntent(launchIntent);
         super.onCreate(savedInstanceState);
     }
 
@@ -71,6 +79,7 @@ public class MainActivity extends BridgeActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         pendingIncoming = null;
+        readAttempted = false;
         readIncomingIntent(intent);
     }
 
@@ -78,7 +87,7 @@ public class MainActivity extends BridgeActivity {
     public void onResume() {
         super.onResume();
         configureWebView();
-        if (pendingIncoming == null) {
+        if (pendingIncoming == null && !readAttempted) {
             readIncomingIntent(getIntent());
         }
         notifyJsIncomingFile();
@@ -99,6 +108,7 @@ public class MainActivity extends BridgeActivity {
             webView.addJavascriptInterface(new SaveFileBridge(this), "AndroidSave");
             webView.addJavascriptInterface(new FileOpenBridge(this), "AndroidFileOpen");
         }
+        flushPendingToast();
     }
 
     private boolean isFileOpenIntent(Intent intent) {
@@ -107,26 +117,35 @@ public class MainActivity extends BridgeActivity {
         return Intent.ACTION_VIEW.equals(action) || Intent.ACTION_SEND.equals(action);
     }
 
-    private void readIncomingIntent(Intent intent) {
-        if (!isFileOpenIntent(intent)) return;
-
+    private Uri extractUri(Intent intent) {
+        if (intent == null) return null;
         Uri uri = intent.getData();
-        if (uri == null && Intent.ACTION_SEND.equals(intent.getAction())) {
+        if (uri != null) return uri;
+        if (Intent.ACTION_SEND.equals(intent.getAction())) {
             uri = IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri.class);
+            if (uri != null) return uri;
         }
+        ClipData clip = intent.getClipData();
+        if (clip != null && clip.getItemCount() > 0) {
+            return clip.getItemAt(0).getUri();
+        }
+        return null;
+    }
+
+    private void readIncomingIntent(Intent intent) {
+        if (!isFileOpenIntent(intent) || pendingIncoming != null) return;
+
+        Uri uri = extractUri(intent);
         if (uri == null) return;
 
+        readAttempted = true;
         String name = resolveDisplayName(uri);
         final String lower = name.toLowerCase();
         String mime = getContentResolver().getType(uri);
         if (mime == null && intent.getType() != null) mime = intent.getType();
 
-        try (InputStream in = getContentResolver().openInputStream(uri)) {
-            if (in == null) {
-                toastJs("❌ Nu am acces la fișier");
-                return;
-            }
-            byte[] data = readBytes(in);
+        try {
+            byte[] data = readUriBytes(intent, uri);
             if (data.length == 0) {
                 toastJs("❌ Fișier gol");
                 return;
@@ -152,8 +171,73 @@ public class MainActivity extends BridgeActivity {
             clearIntentPayload(intent);
             notifyJsIncomingFile();
         } catch (Exception e) {
-            toastJs("❌ Nu s-a putut citi fișierul");
+            toastJs("❌ Nu s-a putut citi: " + (e.getMessage() != null ? e.getMessage() : "acces refuzat"));
         }
+    }
+
+    private byte[] readUriBytes(Intent intent, Uri uri) throws Exception {
+        Exception last = null;
+
+        try {
+            return readBytes(openUriStream(intent, uri));
+        } catch (Exception e) {
+            last = e;
+        }
+
+        try {
+            AssetFileDescriptor afd = getContentResolver().openAssetFileDescriptor(uri, "r");
+            if (afd != null) {
+                try (InputStream in = afd.createInputStream()) {
+                    if (in != null) return readBytes(in);
+                } finally {
+                    afd.close();
+                }
+            }
+        } catch (Exception e) {
+            last = e;
+        }
+
+        try {
+            ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(uri, "r");
+            if (pfd != null) {
+                try (InputStream in = new FileInputStream(pfd.getFileDescriptor())) {
+                    return readBytes(in);
+                } finally {
+                    pfd.close();
+                }
+            }
+        } catch (Exception e) {
+            last = e;
+        }
+
+        if (last != null) throw last;
+        throw new Exception("acces refuzat");
+    }
+
+    private InputStream openUriStream(Intent intent, Uri uri) throws Exception {
+        final int grantFlags = intent.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        if (grantFlags != 0) {
+            try {
+                getContentResolver().takePersistableUriPermission(uri, grantFlags);
+            } catch (Exception ignored) {
+            }
+        }
+
+        String scheme = uri.getScheme();
+        if ("file".equalsIgnoreCase(scheme)) {
+            String path = uri.getPath();
+            if (path != null) {
+                File file = new File(path);
+                if (file.exists() && file.canRead()) {
+                    return new FileInputStream(file);
+                }
+            }
+        }
+
+        InputStream in = getContentResolver().openInputStream(uri);
+        if (in != null) return in;
+
+        throw new Exception("nu am acces la fișier");
     }
 
     private static String detectFileType(String lowerName, String mime, byte[] data) {
@@ -199,6 +283,7 @@ public class MainActivity extends BridgeActivity {
         intent.setData(null);
         intent.setType(null);
         intent.setAction(null);
+        intent.setClipData(null);
         intent.removeExtra(Intent.EXTRA_STREAM);
     }
 
@@ -239,11 +324,21 @@ public class MainActivity extends BridgeActivity {
     }
 
     private void toastJs(String message) {
+        pendingToast = message;
+        flushPendingToast();
+    }
+
+    private void flushPendingToast() {
+        if (pendingToast == null) return;
         if (bridge == null || bridge.getWebView() == null) return;
-        final String js = "window.showToast && window.showToast('" + escapeJs(message) + "')";
+        final String msg = escapeJs(pendingToast);
+        pendingToast = null;
         bridge.getWebView().post(() -> {
             if (bridge != null && bridge.getWebView() != null) {
-                bridge.getWebView().evaluateJavascript(js, null);
+                bridge.getWebView().evaluateJavascript(
+                    "window.showToast && window.showToast('" + msg + "')",
+                    null
+                );
             }
         });
     }
@@ -306,7 +401,7 @@ public class MainActivity extends BridgeActivity {
     }
 
     private static String escapeJs(String s) {
-        return s.replace("\\", "\\\\").replace("'", "\\'");
+        return s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", " ");
     }
 
     static class FileOpenBridge {
