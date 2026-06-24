@@ -6,9 +6,11 @@ import android.content.res.AssetFileDescriptor;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
+import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
 import android.util.Base64;
 import android.webkit.JavascriptInterface;
@@ -33,15 +35,19 @@ public class MainActivity extends BridgeActivity {
 
     private static final int MAX_FILE_BYTES = 25 * 1024 * 1024;
     private static final int MAX_DELIVER_RETRIES = 120;
+    private static final int MAX_READ_RETRIES = 12;
 
     private byte[] pendingSaveBytes;
     private PendingIncomingFile pendingIncoming;
     private int deliverRetries = 0;
+    private int readRetries = 0;
     private WebView bridgedWebView = null;
-    private boolean readAttempted = false;
     private String pendingToast = null;
+    private Intent heldIntent = null;
+    private Uri heldUri = null;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final Runnable readIncomingRunnable = this::tryReadIncoming;
 
     private ActivityResultLauncher<Intent> saveDocumentLauncher;
 
@@ -63,9 +69,9 @@ public class MainActivity extends BridgeActivity {
             new ActivityResultContracts.StartActivityForResult(),
             result -> handleSaveResult(result.getResultCode(), result.getData())
         );
-        Intent launchIntent = getIntent();
-        readIncomingIntent(launchIntent);
+        cacheIncomingIntent(getIntent());
         super.onCreate(savedInstanceState);
+        scheduleReadIncoming(80);
     }
 
     @Override
@@ -79,18 +85,96 @@ public class MainActivity extends BridgeActivity {
         super.onNewIntent(intent);
         setIntent(intent);
         pendingIncoming = null;
-        readAttempted = false;
-        readIncomingIntent(intent);
+        cacheIncomingIntent(intent);
+        scheduleReadIncoming(0);
     }
 
     @Override
     public void onResume() {
         super.onResume();
         configureWebView();
-        if (pendingIncoming == null && !readAttempted) {
-            readIncomingIntent(getIntent());
+        if (pendingIncoming == null && heldUri != null) {
+            scheduleReadIncoming(0);
         }
         notifyJsIncomingFile();
+    }
+
+    private void cacheIncomingIntent(Intent intent) {
+        if (!isFileOpenIntent(intent)) return;
+        heldIntent = intent;
+        heldUri = extractUri(intent);
+        readRetries = 0;
+    }
+
+    private void scheduleReadIncoming(long delayMs) {
+        mainHandler.removeCallbacks(readIncomingRunnable);
+        if (heldUri == null || pendingIncoming != null) return;
+        mainHandler.postDelayed(readIncomingRunnable, delayMs);
+    }
+
+    private void tryReadIncoming() {
+        if (pendingIncoming != null || heldUri == null) return;
+
+        Intent intent = heldIntent != null ? heldIntent : getIntent();
+        if (!isFileOpenIntent(intent)) return;
+
+        Uri uri = heldUri;
+        String name = resolveDisplayName(uri);
+        final String lower = name.toLowerCase();
+        String mime = null;
+        try {
+            mime = getContentResolver().getType(uri);
+        } catch (Exception ignored) {
+        }
+        if (mime == null && intent.getType() != null) mime = intent.getType();
+
+        try {
+            byte[] data = readUriBytes(intent, uri);
+            if (data.length == 0) {
+                failRead("❌ Fișier gol");
+                return;
+            }
+            if (data.length > MAX_FILE_BYTES) {
+                toastJs("❌ Fișier prea mare (max 25 MB)");
+                clearHeldIntent();
+                return;
+            }
+
+            String type = detectFileType(lower, mime, data);
+            if (type == null) {
+                toastJs("⚠️ Doar PDF, HTML și TXT");
+                clearHeldIntent();
+                return;
+            }
+
+            if ("pdf".equals(type) && !lower.endsWith(".pdf")) name += ".pdf";
+            if ("txt".equals(type) && !lower.endsWith(".txt")) name += ".txt";
+
+            pendingIncoming = new PendingIncomingFile(data, name, type);
+            deliverRetries = 0;
+            clearHeldIntent();
+            clearIntentPayload(intent);
+            notifyJsIncomingFile();
+        } catch (Exception e) {
+            failRead(null);
+        }
+    }
+
+    private void failRead(String finalMessage) {
+        readRetries++;
+        if (readRetries < MAX_READ_RETRIES) {
+            scheduleReadIncoming(350);
+            return;
+        }
+        toastJs(finalMessage != null ? finalMessage : "❌ Nu s-a putut citi fișierul");
+        clearHeldIntent();
+    }
+
+    private void clearHeldIntent() {
+        heldIntent = null;
+        heldUri = null;
+        readRetries = 0;
+        mainHandler.removeCallbacks(readIncomingRunnable);
     }
 
     private void configureWebView() {
@@ -132,54 +216,24 @@ public class MainActivity extends BridgeActivity {
         return null;
     }
 
-    private void readIncomingIntent(Intent intent) {
-        if (!isFileOpenIntent(intent) || pendingIncoming != null) return;
-
-        Uri uri = extractUri(intent);
-        if (uri == null) return;
-
-        readAttempted = true;
-        String name = resolveDisplayName(uri);
-        final String lower = name.toLowerCase();
-        String mime = getContentResolver().getType(uri);
-        if (mime == null && intent.getType() != null) mime = intent.getType();
-
-        try {
-            byte[] data = readUriBytes(intent, uri);
-            if (data.length == 0) {
-                toastJs("❌ Fișier gol");
-                return;
-            }
-            if (data.length > MAX_FILE_BYTES) {
-                toastJs("❌ Fișier prea mare (max 25 MB)");
-                clearIntentPayload(intent);
-                return;
-            }
-
-            String type = detectFileType(lower, mime, data);
-            if (type == null) {
-                toastJs("⚠️ Doar PDF, HTML și TXT");
-                clearIntentPayload(intent);
-                return;
-            }
-
-            if ("pdf".equals(type) && !lower.endsWith(".pdf")) name += ".pdf";
-            if ("txt".equals(type) && !lower.endsWith(".txt")) name += ".txt";
-
-            pendingIncoming = new PendingIncomingFile(data, name, type);
-            deliverRetries = 0;
-            clearIntentPayload(intent);
-            notifyJsIncomingFile();
-        } catch (Exception e) {
-            toastJs("❌ Nu s-a putut citi: " + (e.getMessage() != null ? e.getMessage() : "acces refuzat"));
-        }
-    }
-
     private byte[] readUriBytes(Intent intent, Uri uri) throws Exception {
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+
         Exception last = null;
 
         try {
-            return readBytes(openUriStream(intent, uri));
+            File direct = fileFromDocumentUri(uri);
+            if (direct != null) {
+                try (FileInputStream in = new FileInputStream(direct)) {
+                    return readBytes(in);
+                }
+            }
+        } catch (Exception e) {
+            last = e;
+        }
+
+        try {
+            return readBytes(openUriStream(uri));
         } catch (Exception e) {
             last = e;
         }
@@ -214,15 +268,57 @@ public class MainActivity extends BridgeActivity {
         throw new Exception("acces refuzat");
     }
 
-    private InputStream openUriStream(Intent intent, Uri uri) throws Exception {
-        final int grantFlags = intent.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-        if (grantFlags != 0) {
+    private File fileFromDocumentUri(Uri uri) {
+        if (uri == null) return null;
+
+        if ("file".equalsIgnoreCase(uri.getScheme())) {
+            String path = uri.getPath();
+            if (path != null) {
+                File f = new File(path);
+                if (f.exists() && f.canRead()) return f;
+            }
+            return null;
+        }
+
+        if (!"content".equalsIgnoreCase(uri.getScheme())) return null;
+        String authority = uri.getAuthority();
+        if (authority == null) return null;
+
+        if ("com.android.externalstorage.documents".equals(authority)) {
             try {
-                getContentResolver().takePersistableUriPermission(uri, grantFlags);
+                String docId = DocumentsContract.getDocumentId(uri);
+                if (docId != null && docId.startsWith("primary:")) {
+                    String rel = docId.substring(8);
+                    File f = new File(Environment.getExternalStorageDirectory(), rel);
+                    if (f.exists() && f.canRead()) return f;
+                }
             } catch (Exception ignored) {
             }
         }
 
+        if ("com.android.providers.downloads.documents".equals(authority)) {
+            try {
+                String docId = DocumentsContract.getDocumentId(uri);
+                if (docId != null && docId.startsWith("raw:")) {
+                    File f = new File(docId.substring(4));
+                    if (f.exists() && f.canRead()) return f;
+                }
+            } catch (Exception ignored) {
+            }
+        }
+
+        String segment = uri.getLastPathSegment();
+        if (segment != null && segment.contains(":")) {
+            int colon = segment.indexOf(':');
+            String rel = segment.substring(colon + 1);
+            File f = new File(Environment.getExternalStorageDirectory(), rel);
+            if (f.exists() && f.canRead()) return f;
+        }
+
+        return null;
+    }
+
+    private InputStream openUriStream(Uri uri) throws Exception {
         String scheme = uri.getScheme();
         if ("file".equalsIgnoreCase(scheme)) {
             String path = uri.getPath();
