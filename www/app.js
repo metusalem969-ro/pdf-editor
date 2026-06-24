@@ -111,6 +111,7 @@ function showToast(msg, dur = 2500) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('show'), dur);
 }
+window.showToast = showToast;
 
 function setLoading(on, msg = 'Se procesează...') {
   document.getElementById('loading-msg').textContent = msg;
@@ -659,12 +660,24 @@ async function openTxtContent(text, name) {
   showToast('✅ ' + (name || 'document.txt'));
 }
 
+function readPendingBase64FromNative() {
+  if (!window.AndroidFileOpen || !AndroidFileOpen.hasPendingFile()) return '';
+  const len = AndroidFileOpen.getPendingByteLength();
+  if (!len) return AndroidFileOpen.getPendingBase64Chunk ? '' : '';
+  const chunkSize = 262144;
+  let b64 = '';
+  for (let i = 0; i < len; i += chunkSize) {
+    b64 += AndroidFileOpen.getPendingBase64Chunk(i, chunkSize);
+  }
+  return b64;
+}
+
 window.consumeNativeIncomingFile = async function() {
   try {
     if (window.AndroidFileOpen && AndroidFileOpen.hasPendingFile()) {
       const type = AndroidFileOpen.getPendingType();
       const name = AndroidFileOpen.getPendingName();
-      const b64 = AndroidFileOpen.getPendingBase64();
+      const b64 = readPendingBase64FromNative();
       AndroidFileOpen.clearPending();
       if (!b64) return;
       if (type === 'html') await window.openHtmlBase64(b64, name);
@@ -682,6 +695,18 @@ window.consumeNativeIncomingFile = async function() {
     showToast('❌ Eroare la deschidere fișier');
   }
 };
+
+function startNativeFilePoll() {
+  let n = 0;
+  const timer = setInterval(() => {
+    n++;
+    if (n > 80) clearInterval(timer);
+    if (window.AndroidFileOpen && AndroidFileOpen.hasPendingFile()) {
+      window.consumeNativeIncomingFile();
+      clearInterval(timer);
+    }
+  }, 300);
+}
 
 const RECENT_KEY = 'pdf-editor-recent';
 function addRecent(item) {
@@ -1741,4 +1766,5 @@ setViewerMode('none');
 setTool('scroll');
 updateNav();
 window.consumeNativeIncomingFile();
+startNativeFilePoll();
 if (window.AndroidFileOpen && AndroidFileOpen.onAppReady) AndroidFileOpen.onAppReady();
