@@ -696,6 +696,12 @@ window.consumeNativeIncomingFile = async function() {
   }
 };
 
+window.onExternalOpenFailed = function() {
+  showToast('📂 Apasă Fișier și alege PDF-ul');
+  const inp = document.getElementById('file-inp');
+  if (inp) setTimeout(() => inp.click(), 600);
+};
+
 function startNativeFilePoll() {
   let n = 0;
   const timer = setInterval(() => {

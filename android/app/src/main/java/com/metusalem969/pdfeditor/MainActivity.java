@@ -1,16 +1,21 @@
 package com.metusalem969.pdfeditor;
 
+import android.Manifest;
 import android.content.ClipData;
+import android.content.ContentUris;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.content.res.AssetFileDescriptor;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.provider.DocumentsContract;
+import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.util.Base64;
 import android.webkit.JavascriptInterface;
@@ -19,7 +24,10 @@ import android.webkit.WebView;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 import androidx.core.content.IntentCompat;
+import androidx.documentfile.provider.DocumentFile;
 
 import com.getcapacitor.BridgeActivity;
 
@@ -35,7 +43,8 @@ public class MainActivity extends BridgeActivity {
 
     private static final int MAX_FILE_BYTES = 25 * 1024 * 1024;
     private static final int MAX_DELIVER_RETRIES = 120;
-    private static final int MAX_READ_RETRIES = 12;
+    private static final int MAX_READ_RETRIES = 8;
+    private static final int REQ_STORAGE = 9102;
 
     private byte[] pendingSaveBytes;
     private PendingIncomingFile pendingIncoming;
@@ -45,11 +54,15 @@ public class MainActivity extends BridgeActivity {
     private String pendingToast = null;
     private Intent heldIntent = null;
     private Uri heldUri = null;
+    private String heldName = null;
+    private boolean openDocumentFallbackUsed = false;
+    private boolean waitingStoragePermission = false;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Runnable readIncomingRunnable = this::tryReadIncoming;
 
     private ActivityResultLauncher<Intent> saveDocumentLauncher;
+    private ActivityResultLauncher<String[]> openDocumentLauncher;
 
     private static final class PendingIncomingFile {
         final byte[] data;
@@ -69,9 +82,30 @@ public class MainActivity extends BridgeActivity {
             new ActivityResultContracts.StartActivityForResult(),
             result -> handleSaveResult(result.getResultCode(), result.getData())
         );
+        openDocumentLauncher = registerForActivityResult(
+            new ActivityResultContracts.OpenDocument(),
+            uri -> {
+                if (uri == null) {
+                    toastJs("❌ Deschidere anulată");
+                    clearHeldIntent();
+                    return;
+                }
+                try {
+                    final int flags = Intent.FLAG_GRANT_READ_URI_PERMISSION;
+                    getContentResolver().takePersistableUriPermission(uri, flags);
+                } catch (Exception ignored) {
+                }
+                heldUri = uri;
+                heldIntent = new Intent(Intent.ACTION_VIEW).setDataAndType(uri, getContentResolver().getType(uri));
+                heldName = resolveDisplayName(uri);
+                readRetries = 0;
+                openDocumentFallbackUsed = false;
+                tryReadIncoming();
+            }
+        );
         cacheIncomingIntent(getIntent());
         super.onCreate(savedInstanceState);
-        scheduleReadIncoming(80);
+        scheduleReadIncoming(100);
     }
 
     @Override
@@ -81,10 +115,19 @@ public class MainActivity extends BridgeActivity {
     }
 
     @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus && pendingIncoming == null && heldUri != null) {
+            scheduleReadIncoming(50);
+        }
+    }
+
+    @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
         pendingIncoming = null;
+        openDocumentFallbackUsed = false;
         cacheIncomingIntent(intent);
         scheduleReadIncoming(0);
     }
@@ -93,33 +136,54 @@ public class MainActivity extends BridgeActivity {
     public void onResume() {
         super.onResume();
         configureWebView();
-        if (pendingIncoming == null && heldUri != null) {
+        if (pendingIncoming == null && heldUri != null && !waitingStoragePermission) {
             scheduleReadIncoming(0);
         }
         notifyJsIncomingFile();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQ_STORAGE) {
+            waitingStoragePermission = false;
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                scheduleReadIncoming(0);
+            } else {
+                launchOpenDocumentFallback();
+            }
+        }
     }
 
     private void cacheIncomingIntent(Intent intent) {
         if (!isFileOpenIntent(intent)) return;
         heldIntent = intent;
         heldUri = extractUri(intent);
+        heldName = heldUri != null ? resolveDisplayName(heldUri) : null;
         readRetries = 0;
     }
 
     private void scheduleReadIncoming(long delayMs) {
         mainHandler.removeCallbacks(readIncomingRunnable);
-        if (heldUri == null || pendingIncoming != null) return;
+        if (heldUri == null || pendingIncoming != null || waitingStoragePermission) return;
         mainHandler.postDelayed(readIncomingRunnable, delayMs);
     }
 
     private void tryReadIncoming() {
-        if (pendingIncoming != null || heldUri == null) return;
+        if (pendingIncoming != null || heldUri == null || waitingStoragePermission) return;
+
+        if (needsStoragePermission()) {
+            waitingStoragePermission = true;
+            ActivityCompat.requestPermissions(this,
+                new String[]{Manifest.permission.READ_EXTERNAL_STORAGE}, REQ_STORAGE);
+            return;
+        }
 
         Intent intent = heldIntent != null ? heldIntent : getIntent();
         if (!isFileOpenIntent(intent)) return;
 
         Uri uri = heldUri;
-        String name = resolveDisplayName(uri);
+        String name = heldName != null ? heldName : resolveDisplayName(uri);
         final String lower = name.toLowerCase();
         String mime = null;
         try {
@@ -129,7 +193,7 @@ public class MainActivity extends BridgeActivity {
         if (mime == null && intent.getType() != null) mime = intent.getType();
 
         try {
-            byte[] data = readUriBytes(intent, uri);
+            byte[] data = readUriBytes(intent, uri, name);
             if (data.length == 0) {
                 failRead("❌ Fișier gol");
                 return;
@@ -160,20 +224,67 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
+    private boolean needsStoragePermission() {
+        if (heldUri == null) return false;
+        if (!"file".equalsIgnoreCase(heldUri.getScheme())) return false;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) return false;
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
+            != PackageManager.PERMISSION_GRANTED;
+    }
+
     private void failRead(String finalMessage) {
         readRetries++;
         if (readRetries < MAX_READ_RETRIES) {
-            scheduleReadIncoming(350);
+            scheduleReadIncoming(400);
+            return;
+        }
+        if (!openDocumentFallbackUsed) {
+            launchOpenDocumentFallback();
             return;
         }
         toastJs(finalMessage != null ? finalMessage : "❌ Nu s-a putut citi fișierul");
+        notifyJsOpenFailed();
         clearHeldIntent();
+    }
+
+    private void launchOpenDocumentFallback() {
+        openDocumentFallbackUsed = true;
+        readRetries = 0;
+        toastJs("📂 Alege fișierul din listă");
+        mainHandler.postDelayed(() -> {
+            try {
+                openDocumentLauncher.launch(new String[]{
+                    "application/pdf", "text/html", "text/plain", "application/octet-stream", "*/*"
+                });
+            } catch (Exception e) {
+                toastJs("❌ Nu s-a putut citi fișierul");
+                notifyJsOpenFailed();
+                clearHeldIntent();
+            }
+        }, 400);
+    }
+
+    private void notifyJsOpenFailed() {
+        if (bridge == null || bridge.getWebView() == null) {
+            mainHandler.postDelayed(this::notifyJsOpenFailed, 300);
+            return;
+        }
+        bridge.getWebView().post(() -> {
+            if (bridge != null && bridge.getWebView() != null) {
+                bridge.getWebView().evaluateJavascript(
+                    "window.onExternalOpenFailed && window.onExternalOpenFailed()",
+                    null
+                );
+            }
+        });
     }
 
     private void clearHeldIntent() {
         heldIntent = null;
         heldUri = null;
+        heldName = null;
         readRetries = 0;
+        waitingStoragePermission = false;
         mainHandler.removeCallbacks(readIncomingRunnable);
     }
 
@@ -216,13 +327,24 @@ public class MainActivity extends BridgeActivity {
         return null;
     }
 
-    private byte[] readUriBytes(Intent intent, Uri uri) throws Exception {
+    private byte[] readUriBytes(Intent intent, Uri uri, String displayName) throws Exception {
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
 
         Exception last = null;
 
         try {
-            File direct = fileFromDocumentUri(uri);
+            DocumentFile doc = DocumentFile.fromSingleUri(this, uri);
+            if (doc != null && doc.exists() && doc.canRead()) {
+                try (InputStream in = getContentResolver().openInputStream(uri)) {
+                    if (in != null) return readBytes(in);
+                }
+            }
+        } catch (Exception e) {
+            last = e;
+        }
+
+        try {
+            File direct = fileFromDocumentUri(uri, displayName);
             if (direct != null) {
                 try (FileInputStream in = new FileInputStream(direct)) {
                     return readBytes(in);
@@ -233,7 +355,34 @@ public class MainActivity extends BridgeActivity {
         }
 
         try {
+            byte[] fromStore = readFromMediaStoreDownloads(displayName);
+            if (fromStore != null) return fromStore;
+        } catch (Exception e) {
+            last = e;
+        }
+
+        try {
             return readBytes(openUriStream(uri));
+        } catch (Exception e) {
+            last = e;
+        }
+
+        try {
+            android.content.ContentProviderClient client = getContentResolver().acquireContentProviderClient(uri);
+            if (client != null) {
+                try {
+                    ParcelFileDescriptor pfd = client.openFile(uri, "r");
+                    if (pfd != null) {
+                        try (InputStream in = new FileInputStream(pfd.getFileDescriptor())) {
+                            return readBytes(in);
+                        } finally {
+                            pfd.close();
+                        }
+                    }
+                } finally {
+                    client.close();
+                }
+            }
         } catch (Exception e) {
             last = e;
         }
@@ -268,7 +417,26 @@ public class MainActivity extends BridgeActivity {
         throw new Exception("acces refuzat");
     }
 
-    private File fileFromDocumentUri(Uri uri) {
+    private byte[] readFromMediaStoreDownloads(String displayName) throws Exception {
+        if (displayName == null || displayName.isEmpty()) return null;
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null;
+
+        Uri collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI;
+        String[] projection = {MediaStore.Downloads._ID};
+        String selection = MediaStore.Downloads.DISPLAY_NAME + "=?";
+        try (Cursor c = getContentResolver().query(collection, projection, selection, new String[]{displayName}, null)) {
+            if (c != null && c.moveToFirst()) {
+                long id = c.getLong(0);
+                Uri downloadUri = ContentUris.withAppendedId(collection, id);
+                try (InputStream in = getContentResolver().openInputStream(downloadUri)) {
+                    if (in != null) return readBytes(in);
+                }
+            }
+        }
+        return null;
+    }
+
+    private File fileFromDocumentUri(Uri uri, String displayName) {
         if (uri == null) return null;
 
         if ("file".equalsIgnoreCase(uri.getScheme())) {
@@ -289,8 +457,8 @@ public class MainActivity extends BridgeActivity {
                 String docId = DocumentsContract.getDocumentId(uri);
                 if (docId != null && docId.startsWith("primary:")) {
                     String rel = docId.substring(8);
-                    File f = new File(Environment.getExternalStorageDirectory(), rel);
-                    if (f.exists() && f.canRead()) return f;
+                    File f = resolveStorageFile(rel);
+                    if (f != null) return f;
                 }
             } catch (Exception ignored) {
             }
@@ -311,10 +479,38 @@ public class MainActivity extends BridgeActivity {
         if (segment != null && segment.contains(":")) {
             int colon = segment.indexOf(':');
             String rel = segment.substring(colon + 1);
-            File f = new File(Environment.getExternalStorageDirectory(), rel);
-            if (f.exists() && f.canRead()) return f;
+            File f = resolveStorageFile(rel);
+            if (f != null) return f;
         }
 
+        if (displayName != null && displayName.contains(".")) {
+            try {
+                File dl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                File candidate = new File(dl, displayName);
+                if (candidate.exists() && candidate.canRead()) return candidate;
+                File candidate2 = new File("/storage/emulated/0/Download", displayName);
+                if (candidate2.exists() && candidate2.canRead()) return candidate2;
+            } catch (Exception ignored) {
+            }
+        }
+
+        return null;
+    }
+
+    private File resolveStorageFile(String rel) {
+        if (rel == null || rel.isEmpty()) return null;
+        if (rel.startsWith("/")) rel = rel.substring(1);
+        File[] bases = new File[]{
+            Environment.getExternalStorageDirectory(),
+            new File("/storage/emulated/0")
+        };
+        for (File base : bases) {
+            try {
+                File f = new File(base, rel);
+                if (f.exists() && f.canRead()) return f;
+            } catch (Exception ignored) {
+            }
+        }
         return null;
     }
 
