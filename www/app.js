@@ -654,6 +654,35 @@ window.openHtmlBase64 = async function(b64, name) {
   }
 };
 
+async function openTxtContent(text, name) {
+  openEditor({ format: 'txt', content: text, name: name || 'document.txt' });
+  showToast('✅ ' + (name || 'document.txt'));
+}
+
+window.consumeNativeIncomingFile = async function() {
+  try {
+    if (window.AndroidFileOpen && AndroidFileOpen.hasPendingFile()) {
+      const type = AndroidFileOpen.getPendingType();
+      const name = AndroidFileOpen.getPendingName();
+      const b64 = AndroidFileOpen.getPendingBase64();
+      AndroidFileOpen.clearPending();
+      if (!b64) return;
+      if (type === 'html') await window.openHtmlBase64(b64, name);
+      else if (type === 'txt') {
+        const bin = atob(b64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const text = new TextDecoder('utf-8').decode(bytes);
+        await openTxtContent(text, name);
+      } else await window.openPdfBase64(b64, name);
+      return;
+    }
+  } catch (e) {
+    console.error(e);
+    showToast('❌ Eroare la deschidere fișier');
+  }
+};
+
 const RECENT_KEY = 'pdf-editor-recent';
 function addRecent(item) {
   try {
@@ -1711,3 +1740,5 @@ closeEditor();
 setViewerMode('none');
 setTool('scroll');
 updateNav();
+window.consumeNativeIncomingFile();
+if (window.AndroidFileOpen && AndroidFileOpen.onAppReady) AndroidFileOpen.onAppReady();
