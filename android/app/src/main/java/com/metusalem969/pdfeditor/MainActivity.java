@@ -22,29 +22,30 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 public class MainActivity extends BridgeActivity {
 
     private static final int MAX_FILE_BYTES = 25 * 1024 * 1024;
-    private static final int MAX_DELIVER_RETRIES = 60;
+    private static final int MAX_DELIVER_RETRIES = 120;
+    private static final int BASE64_CHUNK = 256 * 1024;
 
-    private boolean saveBridgeAdded = false;
-    private boolean fileBridgeAdded = false;
     private byte[] pendingSaveBytes;
     private PendingIncomingFile pendingIncoming;
     private int deliverRetries = 0;
+    private WebView bridgedWebView = null;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     private ActivityResultLauncher<Intent> saveDocumentLauncher;
 
     private static final class PendingIncomingFile {
-        final String base64;
+        final byte[] data;
         final String name;
         final String type;
 
-        PendingIncomingFile(String base64, String name, String type) {
-            this.base64 = base64;
+        PendingIncomingFile(byte[] data, String name, String type) {
+            this.data = data;
             this.name = name;
             this.type = type;
         }
@@ -57,7 +58,6 @@ public class MainActivity extends BridgeActivity {
             result -> handleSaveResult(result.getResultCode(), result.getData())
         );
         super.onCreate(savedInstanceState);
-        readIncomingIntent(getIntent());
     }
 
     @Override
@@ -70,6 +70,7 @@ public class MainActivity extends BridgeActivity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        pendingIncoming = null;
         readIncomingIntent(intent);
     }
 
@@ -77,6 +78,9 @@ public class MainActivity extends BridgeActivity {
     public void onResume() {
         super.onResume();
         configureWebView();
+        if (pendingIncoming == null) {
+            readIncomingIntent(getIntent());
+        }
         notifyJsIncomingFile();
     }
 
@@ -89,23 +93,18 @@ public class MainActivity extends BridgeActivity {
         s.setAllowFileAccess(true);
         s.setAllowContentAccess(true);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-        if (!saveBridgeAdded) {
+
+        if (webView != bridgedWebView) {
+            bridgedWebView = webView;
             webView.addJavascriptInterface(new SaveFileBridge(this), "AndroidSave");
-            saveBridgeAdded = true;
-        }
-        if (!fileBridgeAdded) {
             webView.addJavascriptInterface(new FileOpenBridge(this), "AndroidFileOpen");
-            fileBridgeAdded = true;
         }
     }
 
     private boolean isFileOpenIntent(Intent intent) {
         if (intent == null) return false;
         String action = intent.getAction();
-        if (Intent.ACTION_VIEW.equals(action) || Intent.ACTION_SEND.equals(action)) {
-            return intent.getData() != null || intent.hasExtra(Intent.EXTRA_STREAM);
-        }
-        return false;
+        return Intent.ACTION_VIEW.equals(action) || Intent.ACTION_SEND.equals(action);
     }
 
     private void readIncomingIntent(Intent intent) {
@@ -117,62 +116,66 @@ public class MainActivity extends BridgeActivity {
         }
         if (uri == null) return;
 
-        try {
-            final int flags = intent.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-            if (flags != 0) {
-                getContentResolver().takePersistableUriPermission(uri, flags);
-            }
-        } catch (Exception ignored) {
-        }
-
         String name = resolveDisplayName(uri);
         final String lower = name.toLowerCase();
-        final String mime = getContentResolver().getType(uri);
-
-        final boolean isHtml = lower.endsWith(".html") || lower.endsWith(".htm")
-            || lower.endsWith(".xhtml")
-            || (mime != null && mime.contains("html"));
-        final boolean isPdf = lower.endsWith(".pdf")
-            || (mime != null && mime.contains("pdf"));
-        final boolean isTxt = lower.endsWith(".txt")
-            || "text/plain".equals(mime);
-
-        if (!isHtml && !isPdf && !isTxt) return;
+        String mime = getContentResolver().getType(uri);
+        if (mime == null && intent.getType() != null) mime = intent.getType();
 
         try (InputStream in = getContentResolver().openInputStream(uri)) {
-            if (in == null) return;
+            if (in == null) {
+                toastJs("❌ Nu am acces la fișier");
+                return;
+            }
             byte[] data = readBytes(in);
-            if (data.length == 0 || data.length > MAX_FILE_BYTES) return;
-
-            String type;
-            if (isHtml) {
-                type = "html";
-            } else if (isPdf) {
-                type = "pdf";
-                if (!lower.endsWith(".pdf")) name += ".pdf";
-            } else {
-                type = "txt";
-                if (!lower.endsWith(".txt")) name += ".txt";
+            if (data.length == 0) {
+                toastJs("❌ Fișier gol");
+                return;
+            }
+            if (data.length > MAX_FILE_BYTES) {
+                toastJs("❌ Fișier prea mare (max 25 MB)");
+                clearIntentPayload(intent);
+                return;
             }
 
-            pendingIncoming = new PendingIncomingFile(
-                Base64.encodeToString(data, Base64.NO_WRAP),
-                name,
-                type
-            );
+            String type = detectFileType(lower, mime, data);
+            if (type == null) {
+                toastJs("⚠️ Doar PDF, HTML și TXT");
+                clearIntentPayload(intent);
+                return;
+            }
+
+            if ("pdf".equals(type) && !lower.endsWith(".pdf")) name += ".pdf";
+            if ("txt".equals(type) && !lower.endsWith(".txt")) name += ".txt";
+
+            pendingIncoming = new PendingIncomingFile(data, name, type);
             deliverRetries = 0;
             clearIntentPayload(intent);
             notifyJsIncomingFile();
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            toastJs("❌ Nu s-a putut citi fișierul");
         }
+    }
+
+    private static String detectFileType(String lowerName, String mime, byte[] data) {
+        if (data.length >= 4 && data[0] == '%' && data[1] == 'P' && data[2] == 'D' && data[3] == 'F') {
+            return "pdf";
+        }
+        if (lowerName.endsWith(".pdf") || (mime != null && mime.contains("pdf"))) return "pdf";
+        if (lowerName.endsWith(".html") || lowerName.endsWith(".htm") || lowerName.endsWith(".xhtml")
+            || (mime != null && mime.contains("html"))) return "html";
+        if (lowerName.endsWith(".txt") || "text/plain".equals(mime)) return "txt";
+
+        if (data.length >= 5) {
+            String head = new String(data, 0, Math.min(data.length, 64), StandardCharsets.UTF_8).trim().toLowerCase();
+            if (head.startsWith("<!doctype html") || head.startsWith("<html")) return "html";
+        }
+        return null;
     }
 
     private String resolveDisplayName(Uri uri) {
         String name = null;
         try (Cursor c = getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
-            if (c != null && c.moveToFirst()) {
-                name = c.getString(0);
-            }
+            if (c != null && c.moveToFirst()) name = c.getString(0);
         } catch (Exception ignored) {
         }
         if (name == null || name.trim().isEmpty()) {
@@ -180,14 +183,21 @@ public class MainActivity extends BridgeActivity {
             if (segment != null) {
                 int slash = segment.lastIndexOf('/');
                 name = slash >= 0 ? segment.substring(slash + 1) : segment;
+                int colon = name.indexOf(':');
+                if (colon >= 0 && colon < name.length() - 1) name = name.substring(colon + 1);
             }
         }
         if (name == null || name.trim().isEmpty()) name = "document";
+        try {
+            name = Uri.decode(name);
+        } catch (Exception ignored) {
+        }
         return name;
     }
 
     private void clearIntentPayload(Intent intent) {
         intent.setData(null);
+        intent.setType(null);
         intent.setAction(null);
         intent.removeExtra(Intent.EXTRA_STREAM);
     }
@@ -226,6 +236,16 @@ public class MainActivity extends BridgeActivity {
     void clearPendingIncoming() {
         pendingIncoming = null;
         deliverRetries = 0;
+    }
+
+    private void toastJs(String message) {
+        if (bridge == null || bridge.getWebView() == null) return;
+        final String js = "window.showToast && window.showToast('" + escapeJs(message) + "')";
+        bridge.getWebView().post(() -> {
+            if (bridge != null && bridge.getWebView() != null) {
+                bridge.getWebView().evaluateJavascript(js, null);
+            }
+        });
     }
 
     void launchSavePicker(byte[] content, String filename, String mime) {
@@ -312,8 +332,17 @@ public class MainActivity extends BridgeActivity {
         }
 
         @JavascriptInterface
-        public String getPendingBase64() {
-            return activity.pendingIncoming != null ? activity.pendingIncoming.base64 : "";
+        public int getPendingByteLength() {
+            return activity.pendingIncoming != null ? activity.pendingIncoming.data.length : 0;
+        }
+
+        @JavascriptInterface
+        public String getPendingBase64Chunk(int offset, int maxLen) {
+            if (activity.pendingIncoming == null) return "";
+            byte[] data = activity.pendingIncoming.data;
+            if (offset < 0 || offset >= data.length) return "";
+            int end = Math.min(offset + Math.max(maxLen, 1), data.length);
+            return Base64.encodeToString(Arrays.copyOfRange(data, offset, end), Base64.NO_WRAP);
         }
 
         @JavascriptInterface
